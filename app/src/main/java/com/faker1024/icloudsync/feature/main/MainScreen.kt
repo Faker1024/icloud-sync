@@ -67,8 +67,8 @@ private enum class MainSection(val label: String, val symbol: String) {
 @Composable
 fun MainScreen(
     viewModel: MainViewModel,
+    cloudDriveViewModel: CloudDriveViewModel,
     onSelectFile: () -> Unit,
-    onClearICloudSession: () -> Unit,
 ) {
     val batches by viewModel.batches.collectAsStateWithLifecycle()
     val albumName by viewModel.albumName.collectAsStateWithLifecycle()
@@ -106,6 +106,7 @@ fun MainScreen(
     ) { padding ->
         when (section) {
             MainSection.CLOUD_DRIVE -> CloudDrivePage(
+                viewModel = cloudDriveViewModel,
                 modifier = Modifier.padding(padding),
                 onMessage = { message ->
                     scope.launch { snackbarHostState.showSnackbar(message) }
@@ -134,7 +135,10 @@ fun MainScreen(
                 modifier = Modifier.padding(padding),
                 albumName = albumName,
                 onSaveAlbumName = viewModel::saveAlbumName,
-                onClearICloudSession = onClearICloudSession,
+                onClearICloudSession = {
+                    cloudDriveViewModel.logout()
+                    scope.launch { snackbarHostState.showSnackbar("已清除本机 iCloud 登录会话") }
+                },
             )
         }
     }
@@ -360,7 +364,7 @@ private fun SettingsPage(
         AlertDialog(
             onDismissRequest = { showClearSessionDialog = false },
             title = { Text("退出 iCloud 登录？") },
-            text = { Text("将清除 App 内嵌网页的 Cookie 和站点数据。已经下载到设备的文件不会被删除。") },
+            text = { Text("将清除 App 加密保存的 iCloud 会话令牌和 Cookie。已经下载到设备的文件不会被删除。") },
             confirmButton = {
                 TextButton(onClick = {
                     onClearICloudSession()
@@ -394,8 +398,9 @@ private fun SettingsPage(
         }
         HorizontalDivider()
         Text("隐私与安全", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text("登录入口固定为 iCloud 中国区 www.icloud.com.cn；网页内容和登录表单由 Apple/云上贵州提供。")
-        Text("App 不主动读取或保存密码、验证码；下载请求使用内嵌网页当前会话交给 Android 系统下载服务。")
+        Text("App 使用自己编写的登录和云盘界面，后台固定连接 iCloud 中国区服务，不打开或嵌入网页。")
+        Text("密码只在内存中用于 SRP 登录证明，不落盘、不明文发送；验证码不保存。会话令牌和 Cookie 使用 Android Keystore 加密后保存在本机。")
+        Text("Apple 未提供访问整个 iCloud Drive 的公开 Android API，因此这里使用网页私有接口；Apple 调整接口后可能需要升级 App。")
         OutlinedButton(
             onClick = { showClearSessionDialog = true },
             modifier = Modifier.fillMaxWidth(),
@@ -413,7 +418,7 @@ private fun EmptyHistoryCard() {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("还没有导入任务", fontWeight = FontWeight.SemiBold)
-            Text("先登录 iCloud 中国区网页下载照片，然后返回这里选择下载文件。")
+            Text("先在“云盘”中登录 iCloud 中国区并下载文件，然后返回这里选择照片、视频或 ZIP。")
         }
     }
 }

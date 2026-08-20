@@ -4,8 +4,7 @@ import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
-import android.webkit.CookieManager
-import android.webkit.URLUtil
+import com.faker1024.icloudsync.core.icloud.isTrustedAppleHost
 import java.io.File
 
 object CloudDriveDownloads {
@@ -14,20 +13,18 @@ object CloudDriveDownloads {
     fun enqueue(
         context: Context,
         url: String,
-        userAgent: String?,
-        contentDisposition: String?,
+        fileName: String,
         mimeType: String?,
+        cookieHeader: String,
     ): Result<String> = runCatching {
         val uri = Uri.parse(url)
         require(uri.scheme == "https" && isTrustedCloudDownloadHost(uri.host)) {
             "iCloud 返回了无法安全下载的链接"
         }
 
-        val fileName = uniqueFileName(
-            sanitizeCloudFileName(URLUtil.guessFileName(url, contentDisposition, mimeType)),
-        )
+        val safeFileName = uniqueFileName(sanitizeCloudFileName(fileName))
         val request = DownloadManager.Request(uri)
-            .setTitle(fileName)
+            .setTitle(safeFileName)
             .setDescription("正在保存到 $PUBLIC_DOWNLOAD_PATH")
             .setMimeType(mimeType?.takeIf { it.isNotBlank() } ?: "application/octet-stream")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
@@ -35,20 +32,17 @@ object CloudDriveDownloads {
             .setAllowedOverRoaming(false)
             .setDestinationInExternalPublicDir(
                 Environment.DIRECTORY_DOWNLOADS,
-                "iCloud Drive/$fileName",
+                "iCloud Drive/$safeFileName",
             )
 
-        CookieManager.getInstance().getCookie(url)
-            ?.takeIf { it.isNotBlank() }
-            ?.let { request.addRequestHeader("Cookie", it) }
-        userAgent?.takeIf { it.isNotBlank() }
-            ?.let { request.addRequestHeader("User-Agent", it) }
-        request.addRequestHeader("Referer", CHINA_ICLOUD_DRIVE_URL)
+        cookieHeader.takeIf(String::isNotBlank)?.let { request.addRequestHeader("Cookie", it) }
+        request.addRequestHeader("User-Agent", ICLOUD_USER_AGENT)
+        request.addRequestHeader("Referer", CHINA_ICLOUD_HOME_URL)
 
         val manager = context.getSystemService(DownloadManager::class.java)
             ?: error("系统下载服务不可用")
         check(manager.enqueue(request) >= 0) { "系统下载服务拒绝了任务" }
-        fileName
+        safeFileName
     }
 
     @Suppress("DEPRECATION")
@@ -70,7 +64,7 @@ object CloudDriveDownloads {
     }
 }
 
-const val CHINA_ICLOUD_DRIVE_URL = "https://www.icloud.com.cn/iclouddrive/"
+const val CHINA_ICLOUD_HOME_URL = "https://www.icloud.com.cn/"
 
 internal fun sanitizeCloudFileName(value: String): String {
     val sanitized = value
@@ -87,19 +81,10 @@ internal fun sanitizeCloudFileName(value: String): String {
 }
 
 internal fun isTrustedCloudDownloadHost(hostValue: String?): Boolean {
-    val host = hostValue?.lowercase() ?: return false
-    return TRUSTED_DOWNLOAD_SUFFIXES.any { suffix ->
-        host == suffix || host.endsWith(".$suffix")
-    }
+    val host = hostValue ?: return false
+    return isTrustedAppleHost(host)
 }
 
 private const val MAX_FILE_NAME_LENGTH = 180
-private val TRUSTED_DOWNLOAD_SUFFIXES = setOf(
-    "icloud.com.cn",
-    "icloud-content.com.cn",
-    "icloud-content.com",
-    "apple-cloudkit.com",
-    "apzones.com",
-    "cdn-apple.com",
-    "apple.com",
-)
+private const val ICLOUD_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3.1 Safari/605.1.15"

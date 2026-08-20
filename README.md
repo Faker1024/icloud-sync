@@ -1,52 +1,46 @@
-# iCloud 中国区云盘下载助手
+# iCloud 中国区云盘客户端
 
-一款面向 Android 和中国大陆 Apple 账户的 iCloud 云盘网页浏览与文件下载助手。
+一款面向 Android 和中国大陆 Apple 账户的第三方 iCloud Drive 浏览与下载工具。
 
-用户可以在 App 内嵌的中国区官方 `https://www.icloud.com.cn/iclouddrive/` 页面完成登录、浏览整个 iCloud 云盘并下载任意类型文件。下载内容按原格式保存到 Android 公共目录 `Download/iCloud Drive/`。中国大陆 iCloud 由云上贵州运营。
+登录、双重认证、文件夹浏览和下载均使用 App 自己编写的 Jetpack Compose 界面，不嵌入或打开 iCloud 网页。底层直接连接中国区 iCloud Web 服务：密码通过 SRP 在设备上生成登录证明，登录后使用加密保存的会话访问 Drive/Document 接口。
 
-## 项目状态
+> Apple 没有提供访问用户整个 iCloud Drive 的公开 Android API。本项目使用未公开的 Web 接口，Apple 调整接口后可能需要升级；本项目与 Apple Inc. 无关联或授权关系。
 
-MVP 已完成首个可构建版本，当前实现包括：
+## 当前能力
 
-- 在 App 内使用受限 WebView 打开 iCloud 中国区云盘网页。
-- 浏览云盘目录并下载文档、压缩包、照片、视频等任意文件。
-- 使用 Android 系统 DownloadManager 保存到 `Download/iCloud Drive/`。
-- 对顶层导航和下载地址执行 HTTPS 与 Apple 域名白名单检查。
-- 支持返回、前进、刷新、云盘首页、系统下载列表和清除登录数据。
-- 通过 Storage Access Framework 选择 ZIP、照片或视频。
-- 本地暂存、存储空间预检和可取消的后台导入。
-- ZIP 路径安全检查、条目数量限制和流式解压。
-- JPEG、HEIC/HEIF、PNG、GIF、常见 RAW、MOV、MP4 识别。
-- SHA-256 精确去重和同名文件保护。
-- 使用 MediaStore 原子写入 `DCIM/iCloud Photos/`。
-- Room 导入历史、进度、失败状态和相册名称设置。
-- Android 10～16 构建基线，无广泛照片或全部文件权限。
+- 原生 Apple 账户与密码登录界面，仅连接 `idmsa.apple.com.cn`。
+- SRP-6a 登录：密码不明文发送、不写入磁盘。
+- 原生双重认证界面，支持受信任设备推送和短信验证码。
+- 浏览整个 iCloud Drive 的文件夹和任意类型文件。
+- 获取 iCloud Document 下载地址后交给 Android `DownloadManager`。
+- 下载地址强制 HTTPS 并执行 Apple/iCloud 主机白名单校验。
+- 原始文件保存到公共目录 `Download/iCloud Drive/`，不把非媒体文件写入图库。
+- 会话令牌和 Cookie 使用 Android Keystore AES-GCM 加密保存，可随时退出并清除。
+- 可选通过系统文件选择器把照片、视频或 ZIP 导入 `DCIM/iCloud Photos/`。
+- ZIP 安全检查、SHA-256 去重、MediaStore 原子写入、Room 历史和 WorkManager 后台导入。
 
-## 产品边界
+## 数据与保存位置
 
-- 不接入非公开 iCloud Drive 或 iCloud Photos API。
-- 不跳转到国际区 `www.icloud.com` 登录入口。
-- 不读取或保存 Apple 账户密码和验证码。
-- 不注入或自动操作 iCloud 网页。
-- 不提供实时或后台 iCloud 同步。
-- 下载时仅将当前 WebView 会话 Cookie 交给 Android 系统下载服务，用于访问用户主动选择的文件。
-- 文件下载和媒体处理均在用户设备上完成，不经过开发者服务器。
+| 数据 | 保存方式 |
+| --- | --- |
+| Apple 账户密码 | 仅在登录期间驻留内存，不保存 |
+| 双重认证验证码 | 仅用于本次验证，不保存 |
+| 会话令牌和 Cookie | Android Keystore AES-GCM 加密后保存在 App 私有空间 |
+| 云盘原始文件 | `Download/iCloud Drive/` |
+| 用户主动导入的照片/视频 | `DCIM/iCloud Photos/` |
+| 文件与账户数据 | 全程设备直连 iCloud，不经过开发者服务器 |
 
-## 开发文档
+选择 Downloads 作为云盘默认位置，是因为 iCloud Drive 可能包含 PDF、Office 文档、压缩包和工程文件；照片导入系统相册是独立、可选的后续操作。
 
-完整的产品边界、技术架构、数据模型、导入流程、安全设计、测试方案和开发里程碑见 [开发设计文档](docs/DEVELOPMENT.md)。
+## 技术栈
 
-## 计划技术栈
-
-- Kotlin
-- Jetpack Compose + Material 3
-- Room + DataStore
-- Kotlin Coroutines + Flow
-- Android WebView
-- Android DownloadManager
-- Storage Access Framework
-- MediaStore
-- WorkManager
+- Kotlin、Jetpack Compose、Material 3
+- MVVM、Coroutines、StateFlow
+- OkHttp、`org.json`
+- Android Keystore、SRP-6a（RFC 5054 2048-bit group / SHA-256）
+- Android DownloadManager、Storage Access Framework、MediaStore
+- Room、DataStore、WorkManager、Hilt
+- `minSdk 29`、`compileSdk/targetSdk 36`
 
 ## 本地构建
 
@@ -56,7 +50,7 @@ MVP 已完成首个可构建版本，当前实现包括：
 ./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-Debug APK 输出位置：
+Debug APK：
 
 ```text
 app/build/outputs/apk/debug/app-debug.apk
@@ -68,17 +62,17 @@ app/build/outputs/apk/debug/app-debug.apk
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-## 当前限制
+## 已知限制
 
-- iCloud 中国区网页上的登录、隐私声明确认、双重认证、文件选择和下载必须由用户手动完成。
-- Apple 没有向 Android 第三方 App 提供访问用户整个 iCloud Drive 的公开原生 API，因此云盘列表来自官方网页而不是原生接口。
-- 下载文件默认保存在 `Download/iCloud Drive/`；照片只有在用户主动执行“导入”后才会额外写入系统相册。
-- 本地下载目录不会镜像 iCloud 云盘的文件夹层级，同名文件会自动追加序号。
-- App 不会在后台检测 iCloud 云端新增、修改或删除的文件。
-- Live Photo 在 Android 相册中按图片和视频两个资源保存。
-- 首个版本不执行 HEIC、H.265 或 RAW 转码。
-- 尚未完成真实 iCloud 千文件批次和多厂商设备验证。
+- 私有接口没有兼容性承诺，不能保证 Apple 调整后仍可用。
+- 启用“高级数据保护”的账户需要额外 PCS 设备授权，当前版本会明确提示暂不支持。
+- 首次登录、双重认证和真实文件下载必须使用测试专用中国大陆 Apple 账户在真机验证；仓库与自动化测试不包含任何账户凭据。
+- App 目前提供浏览和手动下载，不执行后台云端增量检测、双向同步、云端删除或上传。
+- 下载目录暂不镜像 iCloud 文件夹层级；同名文件自动追加序号。
+- 如果账户尚未同意最新版 iCloud 中国区网页条款，需先在 Apple 官方入口完成同意。
 
-## 隐私
+## 文档与来源
 
-App 需要 `INTERNET` 权限加载中国区官方云盘网页和下载用户主动选择的文件。登录表单由 `www.icloud.com.cn` 提供；App 不注入 JavaScript、不读取密码或验证码。WebView 会在本机保存登录 Cookie，用户可在设置中随时清除。文件不会经过开发者服务器。
+架构、协议流程、安全设计、错误模型和验收标准见 [开发设计文档](docs/DEVELOPMENT.md)。
+
+SRP 和 iCloud Drive 协议实现参考了 MIT 许可的 [rclone iCloud Drive backend](https://github.com/rclone/rclone/tree/master/backend/iclouddrive)，归属说明见 [NOTICE](NOTICE)。

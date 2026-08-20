@@ -1,0 +1,15 @@
+iCloud Sync
+Copyright (c) 2026 Faker1024
+
+This product contains an independently adapted implementation informed by the
+rclone iCloud Drive backend:
+
+  rclone - "rsync for cloud storage"
+  Copyright (C) 2012 Nick Craig-Wood
+  https://github.com/rclone/rclone/tree/master/backend/iclouddrive
+
+rclone is distributed under the MIT License. Its license is available at:
+https://github.com/rclone/rclone/blob/master/COPYING
+
+Apple, iCloud and iCloud Drive are trademarks of Apple Inc. This project is an
+independent third-party client and is not affiliated with or endorsed by Apple.

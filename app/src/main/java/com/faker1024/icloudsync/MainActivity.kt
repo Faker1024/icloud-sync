@@ -17,7 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.faker1024.icloudsync.core.web.CloudDriveSession
+import com.faker1024.icloudsync.feature.main.CloudDriveViewModel
 import com.faker1024.icloudsync.feature.main.MainScreen
 import com.faker1024.icloudsync.feature.main.MainViewModel
 import com.faker1024.icloudsync.ui.theme.ICloudSyncTheme
@@ -42,7 +42,10 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun ICloudSyncApp(viewModel: MainViewModel = viewModel()) {
+private fun ICloudSyncApp(
+    viewModel: MainViewModel = viewModel(),
+    cloudDriveViewModel: CloudDriveViewModel = viewModel(),
+) {
     val context = LocalContext.current
     val documentLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -57,6 +60,7 @@ private fun ICloudSyncApp(viewModel: MainViewModel = viewModel()) {
 
     MainScreen(
         viewModel = viewModel,
+        cloudDriveViewModel = cloudDriveViewModel,
         onSelectFile = {
             if (
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -68,7 +72,6 @@ private fun ICloudSyncApp(viewModel: MainViewModel = viewModel()) {
                 documentLauncher.launch(SUPPORTED_INPUT_TYPES)
             }
         },
-        onClearICloudSession = { CloudDriveSession.clear() },
     )
 }
 

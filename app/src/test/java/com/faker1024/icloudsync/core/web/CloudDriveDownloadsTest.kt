@@ -21,6 +21,7 @@ class CloudDriveDownloadsTest {
         assertTrue(isTrustedCloudDownloadHost("cvws.icloud-content.com.cn"))
         assertTrue(isTrustedCloudDownloadHost("www.icloud.com.cn"))
         assertTrue(isTrustedCloudDownloadHost("assets.apple-cloudkit.com"))
+        assertTrue(isTrustedCloudDownloadHost("setup.icloud.com.cn"))
         assertFalse(isTrustedCloudDownloadHost("icloud.com.cn.example.com"))
         assertFalse(isTrustedCloudDownloadHost("evilicloud.com.cn"))
         assertFalse(isTrustedCloudDownloadHost(null))
