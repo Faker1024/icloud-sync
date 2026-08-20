@@ -1,0 +1,684 @@
+# iCloud 照片下载助手：开发设计文档
+
+> 文档状态：MVP 开发基线<br>
+> 最后更新：2026-08-21<br>
+> 适用范围：Android 客户端第一版
+
+## 1. 项目概述
+
+本项目是一款 Android 端的 iCloud 照片网页下载助手。
+
+用户在 Apple 官方 `icloud.com/photos` 页面中完成登录、双重认证、照片选择和下载；本 App 不接入非公开 iCloud API，不读取 Apple 账户凭据，不自动抓取网页内容。App 负责把浏览器下载的 ZIP、照片或视频导入 Android，完成校验、解压、去重、归档、进度展示和历史记录。
+
+产品定位必须使用“网页下载助手”或“照片导入助手”，不得宣传为实时同步、自动同步或官方 iCloud Android 客户端。
+
+## 2. 目标与边界
+
+### 2.1 MVP 目标
+
+- 安全地打开 Apple 官方 iCloud Photos 网页。
+- 引导用户在网页中选择并下载照片或视频。
+- 通过 Android 系统文件选择器接收下载文件。
+- 支持导入 ZIP、单张照片和单个视频。
+- 将媒体保存到 Android 系统相册 `DCIM/iCloud Photos/`。
+- 保留原始文件内容和可用元数据。
+- 使用内容哈希识别重复文件。
+- 支持大文件进度、取消、失败恢复和结果汇总。
+- 整个媒体处理流程默认只在设备本地完成。
+
+### 2.2 MVP 不包含
+
+- App 内输入、保存或转发 Apple 账户密码、验证码、Cookie。
+- 调用非公开 iCloud Photos 接口。
+- 在 WebView 中注入 JavaScript、模拟点击或抓取网页 DOM。
+- 后台检测 iCloud 云端新增或删除内容。
+- Android 与 iCloud 双向删除。
+- 自动删除浏览器下载的原始 ZIP。
+- 云端备份、跨设备同步、多账户管理。
+- 对 HEIC/H.265/RAW 进行强制转码。
+- 将 Live Photo 合成为 Android 专有动态照片格式。
+
+## 3. 核心用户流程
+
+```mermaid
+flowchart LR
+    A[App 首页] --> B[Custom Tab 打开 iCloud Photos]
+    B --> C[用户在 Apple 网页登录并下载]
+    C --> D[返回 App]
+    D --> E[系统文件选择器选择 ZIP 或媒体]
+    E --> F[预检与暂存]
+    F --> G[安全解压和媒体扫描]
+    G --> H[哈希去重]
+    H --> I[写入 MediaStore]
+    I --> J[结果与导入历史]
+```
+
+标准操作步骤：
+
+1. 用户点击“打开 iCloud 照片”。
+2. App 使用 Custom Tab 打开 `https://www.icloud.com/photos/`。
+3. 用户在 Apple 官方网页完成登录和双重认证。
+4. 用户选择照片或视频并触发下载。
+5. 用户返回 App，点击“导入下载文件”。
+6. App 使用 `ACTION_OPEN_DOCUMENT` 打开系统文件选择器。
+7. 用户选择 ZIP、照片或视频。
+8. App 完成暂存、预检、解压、扫描、去重和导入。
+9. App 显示新增、重复、失败和不支持文件数量。
+
+说明：Apple 当前允许用户在 iCloud.com 单批选择最多 1,000 个项目，并提供“未修改的原始文件”“最高分辨率”和“最兼容格式”等下载选项。该能力属于 Apple 网页，不能作为本 App 可控制的接口。
+
+## 4. 技术基线
+
+| 项目 | 决策 |
+| --- | --- |
+| 开发语言 | Kotlin |
+| UI | Jetpack Compose + Material 3 |
+| 架构 | MVVM + 单向数据流 |
+| 异步模型 | Kotlin Coroutines + Flow |
+| 本地数据库 | Room |
+| 设置存储 | DataStore |
+| 依赖注入 | Hilt |
+| 网页入口 | AndroidX Browser Custom Tabs |
+| 文件输入 | Storage Access Framework |
+| 媒体输出 | MediaStore |
+| 后台任务 | WorkManager `CoroutineWorker`，大任务前台通知 |
+| 最低系统 | Android 10，`minSdk = 29` |
+| 编译/目标版本 | `compileSdk = 36`，`targetSdk = 36` |
+| Java 工具链 | 使用当前 Android Gradle Plugin 支持的稳定 JDK，并在 Gradle 中锁定 |
+
+从 2026 年 8 月 31 日起，Google Play 新应用和更新需要以 Android 16（API 36）或更高版本为目标，因此本项目直接以 API 36 为基线。依赖版本统一放入 `gradle/libs.versions.toml`，只使用稳定版并提交锁定结果，不在本文硬编码容易过期的库版本。
+
+## 5. 总体架构
+
+MVP 阶段使用单 `app` Gradle 模块，按职责划分 Kotlin 包。暂不引入多 Gradle 模块，以减少构建复杂度；当功能扩展到云端中转、多账户或格式转换后再拆分模块。
+
+建议目录：
+
+```text
+app/src/main/java/<package>/
+├── app/                 # Application、导航、依赖注入
+├── core/
+│   ├── browser/         # Custom Tab 启动
+│   ├── database/        # Room、DAO、迁移
+│   ├── files/           # SAF、暂存、空间检测
+│   ├── hashing/         # SHA-256
+│   ├── media/           # MIME、元数据、MediaStore
+│   ├── security/        # ZIP 校验、日志脱敏
+│   └── worker/          # 导入任务调度
+├── feature/
+│   ├── home/
+│   ├── guide/
+│   ├── importer/
+│   ├── history/
+│   └── settings/
+└── domain/              # 用例、模型、错误定义
+```
+
+### 5.1 分层职责
+
+- UI 层：展示状态、接收用户操作，不直接处理文件。
+- Domain 层：定义打开网页、创建批次、执行导入、取消导入、清理缓存等用例。
+- Data 层：Room、DataStore、ContentResolver、MediaStore 和文件系统实现。
+- Worker 层：执行可恢复的耗时任务，持续更新数据库进度。
+
+UI 只订阅数据库和 Worker 状态。不要依赖 Activity 内存状态保存导入进度。
+
+## 6. 网页与登录设计
+
+### 6.1 打开方式
+
+使用 `CustomTabsIntent` 打开固定白名单地址：
+
+```text
+https://www.icloud.com/photos/
+```
+
+如 Custom Tab 不可用，则降级为系统 `ACTION_VIEW`。禁止把任意用户输入拼接到网址中。
+
+### 6.2 安全边界
+
+- App 不声明或实现 Apple 登录表单。
+- App 不读取浏览器 Cookie、网页内容或下载请求。
+- App 不判断用户是否成功登录。
+- App 不保存 Apple ID、电话号码或验证码。
+- App 不承诺保持 Apple 登录状态；登录状态由用户浏览器管理。
+- 原生 App 如果仅启动系统浏览器且没有联网功能，可以不声明 `INTERNET` 权限。
+
+### 6.3 浏览器兼容性
+
+至少验证：
+
+- Google Chrome。
+- Samsung Internet。
+- 小米、OPPO、vivo 系统默认浏览器。
+- 未安装支持 Custom Tabs 的浏览器时的降级行为。
+
+浏览器是否生成 ZIP、文件命名、下载位置和下载提示可能不同；原生流程不得依赖固定文件名或固定 Downloads 绝对路径。
+
+## 7. 文件选择与暂存
+
+### 7.1 输入方式
+
+使用 `ACTION_OPEN_DOCUMENT`，允许选择：
+
+- `application/zip`、`application/x-zip-compressed`；
+- `image/*`；
+- `video/*`；
+- MIME 不准确时允许 `application/octet-stream`，进入后续签名检测。
+
+MVP 每次选择一个输入文件。多选可以作为后续增强；网页通常已经把批量项目打包为一个 ZIP。
+
+### 7.2 暂存策略
+
+文件选择完成后立即创建 `ImportBatch`，然后把 URI 内容流式复制到 App 私有暂存目录：
+
+```text
+<app-specific>/imports/<batch-id>/source
+```
+
+选择暂存而不是长期依赖 URI，原因如下：
+
+- 不同 DocumentsProvider 对持久 URI 权限支持不一致。
+- Worker 重启后仍需要可靠读取输入。
+- 可以统一计算大小、哈希和恢复进度。
+- 不会修改用户原始下载文件。
+
+暂存文件属于 App 私有数据，导入完成、取消或超过保留期后删除。用户原始 ZIP 默认永不删除。
+
+### 7.3 空间预检
+
+导入前检查：
+
+- 输入文件可读。
+- 输入大小是否已知。
+- App 私有暂存空间是否可用。
+- MediaStore 所在卷是否可写。
+- 可用空间是否足够容纳暂存文件、单个解压项和最终媒体文件。
+
+如果 ZIP 中声明了解压后总大小，使用该值估算；声明值缺失或不可信时边读边限制。UI 可按输入大小的 2～3 倍给出保守空间提醒，但真正的中止判断以实际可用空间和已写入字节为准。
+
+## 8. 安全解压
+
+ZIP 在任何内容写入公共相册前必须通过预检。
+
+### 8.1 校验规则
+
+- 拒绝绝对路径。
+- 拒绝包含 `..` 后可逃逸目标目录的路径。
+- 路径正规化后必须位于当前批次暂存目录内。
+- 拒绝加密或需要密码的 ZIP，并给出明确错误。
+- 默认最多接受 5,000 个条目；该值应可配置。
+- 忽略目录和系统元数据文件，例如 `__MACOSX`、`.DS_Store`。
+- 不信任扩展名，结合文件头和 MIME 判断类型。
+- 每写入一段数据都检查实际解压字节数和剩余空间。
+- 不把整个文件或 ZIP 一次性读入内存。
+
+### 8.2 流式处理
+
+一次只处理一个 ZIP 条目：
+
+1. 把当前条目流式写入批次临时文件。
+2. 同时计算 SHA-256。
+3. 检查文件类型和基础元数据。
+4. 查询数据库判断是否重复。
+5. 非重复文件写入 MediaStore。
+6. 成功后删除当前条目临时文件。
+
+此方案不会同时完整保存所有解压文件，可显著降低峰值空间占用。
+
+## 9. 媒体识别与格式支持
+
+### 9.1 MVP 支持
+
+| 类型 | 常见扩展名 | 处理方式 |
+| --- | --- | --- |
+| JPEG | `.jpg`、`.jpeg` | 原样导入 |
+| HEIC/HEIF | `.heic`、`.heif` | 原样导入 |
+| PNG | `.png` | 原样导入 |
+| GIF | `.gif` | 原样导入 |
+| DNG/常见 RAW | `.dng` 等 | 识别后原样导入；无法预览不视为导入失败 |
+| MP4 | `.mp4` | 原样导入 |
+| QuickTime | `.mov` | 原样导入 |
+
+格式识别优先级：文件签名、系统 MIME 探测、扩展名。三者冲突时使用最保守结果；无法确认的文件标记为 `UNSUPPORTED`，不写入相册。
+
+### 9.2 Live Photo
+
+MVP 将 Live Photo 作为独立图片和视频分别导入。尝试用以下信息建立逻辑分组：
+
+- 基础文件名；
+- 拍摄时间；
+- Apple 内容标识元数据（若可读取）。
+
+分组只用于历史页展示，不影响文件写入。缺少配对项时仍允许导入单个文件。
+
+### 9.3 元数据
+
+- 默认保持源文件字节不变，避免重新编码造成画质或元数据损失。
+- 尝试读取拍摄时间、宽高、时长、方向和 GPS。
+- 读取失败不阻止媒体导入。
+- `DATE_TAKEN` 优先使用可信拍摄时间，其次使用文件时间，最后使用导入时间。
+- GPS 不进入日志、埋点或崩溃报告。
+
+## 10. 去重策略
+
+### 10.1 判定规则
+
+精确重复键：
+
+```text
+SHA-256 + 文件字节数
+```
+
+文件名、拍摄时间和尺寸只能用于快速展示或候选判断，不能作为最终重复依据。
+
+### 10.2 默认行为
+
+- 精确重复：跳过，不覆盖现有文件。
+- 同名但哈希不同：生成不冲突名称并导入。
+- 相同媒体的编辑版本：如果字节不同，视为不同文件。
+- 已有记录但目标 URI 已丢失：标记记录异常，并允许重新导入。
+
+首次导入只对本 App 历史记录去重，不扫描用户整个相册，从而避免申请广泛照片读取权限。后续如需“与全手机相册去重”，必须单独评估权限和 Google Play 合规性。
+
+## 11. 写入 Android 系统相册
+
+根据媒体类型写入：
+
+- 图片：`MediaStore.Images`。
+- 视频：`MediaStore.Video`。
+
+建议字段：
+
+```text
+DISPLAY_NAME
+MIME_TYPE
+RELATIVE_PATH = DCIM/iCloud Photos/
+DATE_TAKEN
+DATE_ADDED
+IS_PENDING = 1
+```
+
+写入流程：
+
+1. 创建 `IS_PENDING = 1` 的 MediaStore 项。
+2. 流式复制文件并检查实际字节数。
+3. 关闭流后进行必要的元数据更新。
+4. 设置 `IS_PENDING = 0` 发布到相册。
+5. 更新数据库中的目标 URI 和状态。
+
+写入失败时删除未完成的 MediaStore 项；若删除失败，则记录清理任务，在下次启动时处理。用户取消任务时，已完整发布的文件保留，未发布文件清理。
+
+## 12. 导入任务状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> QUEUED
+    QUEUED --> STAGING
+    STAGING --> PREFLIGHT
+    PREFLIGHT --> SCANNING
+    SCANNING --> IMPORTING
+    IMPORTING --> COMPLETED
+    IMPORTING --> PARTIAL_FAILED
+    STAGING --> FAILED
+    PREFLIGHT --> FAILED
+    SCANNING --> FAILED
+    IMPORTING --> FAILED
+    QUEUED --> CANCELLED
+    STAGING --> CANCELLED
+    SCANNING --> CANCELLED
+    IMPORTING --> CANCELLED
+```
+
+状态定义：
+
+| 状态 | 含义 |
+| --- | --- |
+| `QUEUED` | 已创建批次，等待执行 |
+| `STAGING` | 正在复制用户选中的输入 |
+| `PREFLIGHT` | 正在检查格式、空间和 ZIP 安全性 |
+| `SCANNING` | 正在枚举条目和读取元数据 |
+| `IMPORTING` | 正在去重并写入 MediaStore |
+| `COMPLETED` | 所有可支持项目处理成功 |
+| `PARTIAL_FAILED` | 至少一个项目成功，至少一个项目失败 |
+| `FAILED` | 批次无法继续且没有成功结果 |
+| `CANCELLED` | 用户取消 |
+
+任务必须是幂等的。进程被终止后重新执行时，已存在 `IMPORTED` 记录的文件不能重复写入。
+
+## 13. 后台执行与通知
+
+- 导入必须由用户明确发起，不做定时后台扫描。
+- 短任务使用 WorkManager 普通 `CoroutineWorker`。
+- 预计超过普通任务窗口的大批量导入切换为带前台通知的长任务。
+- 通知显示已处理数量、当前阶段和取消操作。
+- Android 13 及以上按需请求通知权限；用户拒绝时仍应允许前台内完成导入，并说明离开页面后的限制。
+- Android 14 及以上必须正确声明前台服务类型和对应权限。
+- Android 16 中 WorkManager 长任务会受到 JobScheduler 配额影响；实施阶段需要在真实千文件批次上验证。若任务经常被配额中止，把执行器封装替换为符合平台要求的直接前台服务或其他用户发起任务机制，而不改变 Domain 接口。
+
+不要把单个导入过程实现成不可中断的大循环。每个条目结束后写入检查点，并响应取消信号。
+
+## 14. 数据模型
+
+### 14.1 `ImportBatchEntity`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | String/UUID | 主键 |
+| `sourceDisplayName` | String? | 仅本地展示，日志不得上报 |
+| `sourceMimeType` | String? | 输入 MIME |
+| `sourceSize` | Long? | 输入字节数 |
+| `stagedPath` | String? | App 私有暂存路径 |
+| `state` | Enum | 批次状态 |
+| `totalCount` | Int | 已发现条目数 |
+| `importedCount` | Int | 新增数 |
+| `duplicateCount` | Int | 重复数 |
+| `failedCount` | Int | 失败数 |
+| `unsupportedCount` | Int | 不支持数 |
+| `processedBytes` | Long | 已处理字节数 |
+| `totalBytes` | Long? | 可估算总字节数 |
+| `createdAt` | Instant | 创建时间 |
+| `updatedAt` | Instant | 最后更新时间 |
+| `finishedAt` | Instant? | 结束时间 |
+| `errorCode` | String? | 批次错误码 |
+
+### 14.2 `ImportedMediaEntity`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | String/UUID | 主键 |
+| `batchId` | String | 所属批次 |
+| `entryName` | String | ZIP 内名称或源文件名 |
+| `displayName` | String | 写入相册的名称 |
+| `mimeType` | String? | 最终 MIME |
+| `size` | Long | 字节数 |
+| `sha256` | String? | 完成哈希后写入 |
+| `mediaKind` | Enum | IMAGE、VIDEO、RAW、UNKNOWN |
+| `captureTime` | Instant? | 拍摄时间 |
+| `width` / `height` | Int? | 尺寸 |
+| `durationMs` | Long? | 视频时长 |
+| `livePhotoGroupKey` | String? | Live Photo 逻辑分组 |
+| `destinationUri` | String? | MediaStore URI |
+| `state` | Enum | PENDING、IMPORTED、DUPLICATE、FAILED、UNSUPPORTED |
+| `errorCode` | String? | 文件级错误码 |
+| `createdAt` | Instant | 创建时间 |
+
+为 `(sha256, size)` 建立唯一约束或等效事务校验。批次和媒体记录的状态更新必须在事务中完成，避免计数与明细不一致。
+
+## 15. 错误模型
+
+错误信息要面向用户可理解，同时保留稳定的内部错误码。
+
+| 错误码 | 用户提示 | 是否可重试 |
+| --- | --- | --- |
+| `SOURCE_UNREADABLE` | 无法读取所选文件，请重新选择 | 是 |
+| `SOURCE_INCOMPLETE` | 下载文件可能尚未完成 | 是 |
+| `UNSUPPORTED_ARCHIVE` | 暂不支持此压缩文件 | 否 |
+| `ENCRYPTED_ARCHIVE` | 暂不支持带密码的 ZIP | 否 |
+| `UNSAFE_ARCHIVE_PATH` | 压缩包包含不安全路径，已停止导入 | 否 |
+| `TOO_MANY_ENTRIES` | 压缩包文件数量过多 | 否 |
+| `NO_SPACE` | 存储空间不足 | 是 |
+| `UNSUPPORTED_MEDIA` | 不支持此文件格式 | 否 |
+| `HASH_FAILED` | 文件校验失败 | 是 |
+| `MEDIASTORE_WRITE_FAILED` | 无法保存到系统相册 | 是 |
+| `TASK_INTERRUPTED` | 导入被系统中断，可继续处理 | 是 |
+| `USER_CANCELLED` | 已取消导入 | 是 |
+
+数据库保存错误码，不保存完整异常堆栈、源绝对路径、GPS 或文件内容。调试构建可输出脱敏堆栈，发布构建遵循日志策略。
+
+## 16. 页面与交互
+
+### 16.1 首页
+
+- “打开 iCloud 照片”主按钮。
+- “导入下载文件”主按钮。
+- 上次导入时间和结果摘要。
+- 正在进行的任务卡片。
+- 首次使用时展示完整步骤，后续可折叠。
+
+### 16.2 下载指南
+
+- 说明登录发生在 Apple 官方网页。
+- 说明如何选择照片和下载。
+- 解释三种下载格式。
+- 提示单批选择上限由 Apple 网页决定。
+- 说明下载完成后返回 App 选择 ZIP。
+
+### 16.3 导入预检
+
+- 输入文件名称、大小和类型。
+- 可用空间提示。
+- 默认输出目录。
+- “开始导入”和“重新选择”。
+
+### 16.4 导入进度
+
+- 当前阶段。
+- 已处理数量/总数量。
+- 已处理字节/总字节（可得时）。
+- 新增、重复、失败实时计数。
+- 取消操作。
+
+### 16.5 结果与历史
+
+- 新增、重复、失败、不支持数量。
+- 文件级失败原因。
+- 打开系统相册入口。
+- 重试失败项目。
+- 清除历史只删除数据库记录，不删除已导入媒体。
+
+### 16.6 设置
+
+- 输出相册名称，默认 `iCloud Photos`。
+- 重复文件行为，MVP 仅支持“跳过”。
+- 临时文件自动清理周期。
+- 是否保留已失败任务的暂存文件。
+- 隐私政策、第三方声明和开源许可。
+
+## 17. 权限设计
+
+目标是避免广泛存储权限。
+
+MVP 不应申请：
+
+```text
+MANAGE_EXTERNAL_STORAGE
+READ_MEDIA_IMAGES
+READ_MEDIA_VIDEO
+READ_EXTERNAL_STORAGE
+WRITE_EXTERNAL_STORAGE
+```
+
+通过 Storage Access Framework 读取用户主动选择的文件，通过 MediaStore 写入本 App 创建的媒体。根据最终后台实现，可能需要：
+
+```text
+POST_NOTIFICATIONS
+FOREGROUND_SERVICE
+对应的前台服务类型权限
+```
+
+所有权限必须延迟到相关功能首次使用时申请，并在申请前说明用途。拒绝非关键权限不能导致 App 无法打开。
+
+## 18. 安全与隐私
+
+- 媒体内容不离开设备。
+- Native App 不接收 Apple 凭据。
+- 暂存目录不得被其他 App 访问。
+- 暂存媒体和包含敏感路径的数据库应从 Android Auto Backup 中排除。
+- 发布构建禁止记录文件原始路径、文件名、EXIF、GPS、URI 查询参数。
+- 崩溃平台只上报错误码、App 版本、系统版本和非敏感状态。
+- 第三方 SDK 从严控制；MVP 不接入广告 SDK。
+- 提供清理暂存文件、清除历史和删除全部本地业务数据的入口。
+- 清理历史不得删除系统相册中的照片，除非未来增加单独且明确的用户确认流程。
+- 应用名称、图标和商店材料不得使用 Apple 标志或暗示官方授权。
+- 应用内和商店页声明：本产品为独立第三方工具，与 Apple Inc. 无关联或授权关系。
+
+## 19. 可观测性
+
+允许记录：
+
+- 批次状态和耗时区间。
+- 文件数量、总字节区间。
+- 错误码及发生阶段。
+- Android API 级别、设备厂商和 App 版本。
+
+禁止记录：
+
+- Apple ID、验证码、Cookie。
+- 文件原名、绝对路径、内容哈希全文。
+- 照片内容、缩略图、EXIF、GPS。
+- 用户在 iCloud 网页中的行为或页面内容。
+
+如果接入线上统计或崩溃服务，必须先更新隐私政策和 Google Play Data safety 表单。
+
+## 20. 测试策略
+
+### 20.1 单元测试
+
+- ZIP 路径正规化和 Zip Slip 防护。
+- 文件签名与 MIME 判断。
+- SHA-256 计算和重复判断。
+- 同名文件重命名。
+- Live Photo 分组。
+- 状态机合法转换。
+- 错误码映射。
+- 空间估算和边界值。
+
+### 20.2 集成测试
+
+- SAF URI 到暂存目录。
+- ZIP 单条目流式处理。
+- Room 事务和进程恢复。
+- MediaStore `IS_PENDING` 发布与失败清理。
+- Worker 取消和重试。
+- 清理任务不会删除用户原始文件或已发布媒体。
+
+### 20.3 测试数据集
+
+仓库维护不含隐私的固定测试数据：
+
+- 单张 JPEG。
+- HEIC 和 H.265 视频。
+- Live Photo 图片/视频对。
+- RAW+JPEG。
+- 同名不同内容。
+- 不同名相同内容。
+- 损坏 ZIP。
+- 带密码 ZIP。
+- Zip Slip 测试 ZIP。
+- 文件头和扩展名不一致。
+- 10、100、1,000 个项目批次。
+
+测试资源必须由项目拥有版权或明确允许再分发，不提交真实用户照片。
+
+### 20.4 设备矩阵
+
+- Android 10、12、13、14、15、16。
+- 至少一台低内存设备。
+- Pixel、Samsung，以及至少一个国内主流厂商设备。
+- 内部存储空间不足场景。
+- 无通知权限、后台限制严格、省电模式。
+- App 导入中被杀、设备重启、用户取消。
+
+### 20.5 浏览器手工测试
+
+在 Apple 网页真实验证：
+
+- 未登录、已登录、双重认证。
+- 下载 1、10、100、1,000 个项目。
+- 三种下载格式。
+- 网页生成 ZIP 和单文件的差异。
+- 下载中断后选择未完成文件。
+- Chrome、Samsung Internet 和厂商浏览器。
+
+不要在自动化测试中保存真实 Apple 账号凭据。
+
+## 21. MVP 验收标准
+
+满足以下条件才能认为 MVP 可发布：
+
+- App 能从首页打开正确的 Apple 官方照片网页。
+- App 无法读取用户在网页中输入的账户和验证码。
+- 用户可以选择浏览器下载的 ZIP、图片或视频。
+- 1,000 项标准测试批次能在目标测试设备上完成，且无 OOM。
+- 重复导入同一批次不会在相册产生第二份相同文件。
+- 同名不同内容的文件都能保留。
+- HEIC、JPEG、MOV、MP4 能保持原始字节导入。
+- Live Photo 两个资源不会因同名规则互相覆盖。
+- 存储不足、损坏 ZIP 和不安全 ZIP 均能安全停止。
+- 取消或进程被杀后，不留下对用户可见的半成品。
+- App 不申请广泛照片权限或全部文件权限。
+- 清理缓存不会删除用户原始 ZIP 和已导入媒体。
+- 隐私政策、第三方声明、Data safety 和商店描述与实际行为一致。
+
+## 22. 开发里程碑
+
+### M0：技术验证
+
+- 创建 Android 工程和 CI。
+- Custom Tab 打开 iCloud Photos。
+- SAF 选择 ZIP。
+- 流式解压单文件。
+- MediaStore 写入图片和视频。
+- 在至少两种浏览器验证完整链路。
+
+### M1：核心导入
+
+- Room 数据模型和状态机。
+- 安全 ZIP 处理。
+- SHA-256 去重。
+- 格式识别和元数据读取。
+- 进度、取消、错误结果。
+
+### M2：可靠性
+
+- WorkManager 与前台通知。
+- 进程恢复和幂等重试。
+- 空间预检和残留清理。
+- 1,000 项压力测试。
+- Android 10～16 兼容测试。
+
+### M3：发布准备
+
+- 下载指南和新手流程。
+- 示例 ZIP/演示模式，供审核人员无需 Apple 账号体验核心功能。
+- 隐私政策和第三方声明。
+- Google Play Data safety、权限检查和商店素材。
+- 内测、崩溃修复和发布候选构建。
+
+## 23. 发布前检查
+
+- App 名称和图标不冒充 Apple 或 iCloud 官方应用。
+- 商店文案明确说明需要用户在网页中手动选择和下载。
+- 不声称自动、实时或后台同步 iCloud。
+- Play 审核说明提供无需真实 Apple 账号的示例导入路径。
+- 所有依赖版本已锁定并完成许可证检查。
+- Release 构建关闭调试日志和网络调试能力。
+- Manifest 不包含未使用的敏感权限。
+- Auto Backup 排除项已经过测试。
+- 用户可以访问隐私政策和支持联系方式。
+
+## 24. 后续候选功能
+
+- 一次选择多个 ZIP。
+- 用户选择自定义相册目录。
+- HEIC 转 JPEG、H.265 转 H.264。
+- 更完整的 Live Photo 识别和展示。
+- 对失败条目单独重试。
+- 下载批次日期标签和手动增量标记。
+- 本地 NAS/桌面中转模式。
+
+这些能力不得改变“不读取 Apple 凭据、不接入非公开 iCloud API”的安全边界，除非重新进行产品、法律和安全评审。
+
+## 25. 官方参考资料
+
+- [Apple：从 iCloud.com 下载照片和视频](https://support.apple.com/en-ie/111762)
+- [Android：Custom Tabs 和安全登录](https://developer.android.com/work/guide)
+- [Android：Storage Access Framework](https://developer.android.com/training/data-storage/shared/documents-files)
+- [Android：共享媒体与 MediaStore](https://developer.android.com/training/data-storage/shared/media)
+- [Android：MediaStore `IS_PENDING`](https://developer.android.com/reference/android/provider/MediaStore.MediaColumns#IS_PENDING)
+- [Android：长时间运行的 WorkManager 任务](https://developer.android.com/develop/background-work/background-tasks/persistent/how-to/long-running)
+- [Google Play：目标 API 级别要求](https://support.google.com/googleplay/android-developer/answer/11926878)
+- [Google Play：照片和视频权限政策](https://support.google.com/googleplay/android-developer/answer/14115180)
+- [Google Play：全部文件访问政策](https://support.google.com/googleplay/android-developer/answer/10467955)
+- [Google Play：冒充政策](https://support.google.com/googleplay/android-developer/answer/9888374)
