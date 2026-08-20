@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -38,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.faker1024.icloudsync.BuildConfig
 import com.faker1024.icloudsync.core.database.ImportBatchEntity
 import com.faker1024.icloudsync.core.database.ImportedMediaEntity
 import com.faker1024.icloudsync.domain.model.ImportBatchState
@@ -53,10 +54,11 @@ import com.faker1024.icloudsync.domain.model.isFinished
 import java.text.DateFormat
 import java.util.Date
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 private enum class MainSection(val label: String, val symbol: String) {
-    HOME("首页", "⌂"),
-    GUIDE("指南", "?"),
+    CLOUD_DRIVE("云盘", "☁"),
+    IMPORT("导入", "⇩"),
     HISTORY("历史", "↻"),
     SETTINGS("设置", "⚙"),
 }
@@ -65,15 +67,16 @@ private enum class MainSection(val label: String, val symbol: String) {
 @Composable
 fun MainScreen(
     viewModel: MainViewModel,
-    onOpenICloud: () -> Unit,
     onSelectFile: () -> Unit,
+    onClearICloudSession: () -> Unit,
 ) {
     val batches by viewModel.batches.collectAsStateWithLifecycle()
     val albumName by viewModel.albumName.collectAsStateWithLifecycle()
     val selectedBatchId by viewModel.selectedBatchId.collectAsStateWithLifecycle()
     val selectedBatchItems by viewModel.selectedBatchItems.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    var section by rememberSaveable { mutableStateOf(MainSection.HOME) }
+    val scope = rememberCoroutineScope()
+    var section by rememberSaveable { mutableStateOf(MainSection.CLOUD_DRIVE) }
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
@@ -102,16 +105,20 @@ fun MainScreen(
         },
     ) { padding ->
         when (section) {
-            MainSection.HOME -> HomePage(
+            MainSection.CLOUD_DRIVE -> CloudDrivePage(
                 modifier = Modifier.padding(padding),
-                batches = batches,
-                onOpenICloud = onOpenICloud,
-                onSelectFile = onSelectFile,
-                onCancel = viewModel::cancel,
-                onShowGuide = { section = MainSection.GUIDE },
+                onMessage = { message ->
+                    scope.launch { snackbarHostState.showSnackbar(message) }
+                },
             )
 
-            MainSection.GUIDE -> GuidePage(Modifier.padding(padding))
+            MainSection.IMPORT -> ImportPage(
+                modifier = Modifier.padding(padding),
+                batches = batches,
+                onSelectFile = onSelectFile,
+                onCancel = viewModel::cancel,
+            )
+
             MainSection.HISTORY -> HistoryPage(
                 modifier = Modifier.padding(padding),
                 batches = batches,
@@ -127,19 +134,18 @@ fun MainScreen(
                 modifier = Modifier.padding(padding),
                 albumName = albumName,
                 onSaveAlbumName = viewModel::saveAlbumName,
+                onClearICloudSession = onClearICloudSession,
             )
         }
     }
 }
 
 @Composable
-private fun HomePage(
+private fun ImportPage(
     modifier: Modifier,
     batches: List<ImportBatchEntity>,
-    onOpenICloud: () -> Unit,
     onSelectFile: () -> Unit,
     onCancel: (String) -> Unit,
-    onShowGuide: () -> Unit,
 ) {
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -148,29 +154,16 @@ private fun HomePage(
     ) {
         item {
             Text(
-                "从 iCloud 中国区官方网页下载，再安全导入到 Android 相册。",
+                "云盘下载的所有文件会保留在 Download/iCloud Drive/。如需让照片或视频出现在系统相册，可在这里继续导入。",
                 style = MaterialTheme.typography.bodyLarge,
             )
         }
         item {
             Button(
-                onClick = onOpenICloud,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-            ) {
-                Text("1. 登录 iCloud 中国区")
-            }
-        }
-        item {
-            OutlinedButton(
                 onClick = onSelectFile,
                 modifier = Modifier.fillMaxWidth().height(52.dp),
             ) {
-                Text("2. 导入下载文件")
-            }
-        }
-        item {
-            TextButton(onClick = onShowGuide, modifier = Modifier.fillMaxWidth()) {
-                Text("查看完整下载步骤")
+                Text("选择照片、视频或 ZIP 导入相册")
             }
         }
         if (batches.isEmpty()) {
@@ -238,42 +231,6 @@ private fun ImportBatchCard(batch: ImportBatchEntity, onCancel: () -> Unit) {
                     TextButton(onClick = onCancel) { Text("取消") }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun GuidePage(modifier: Modifier) {
-    Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-    ) {
-        GuideStep("1", "打开 iCloud 中国区", "App 将打开 www.icloud.com.cn；中国大陆 iCloud 由云上贵州运营。")
-        GuideStep("2", "登录并验证", "使用中国大陆 Apple 账户登录，按页面提示完成隐私声明确认和双重认证。App 不读取密码、验证码或 Cookie。")
-        GuideStep("3", "选择并下载", "在网页中选择照片或视频。Apple 网页单批最多可选择 1,000 项。")
-        GuideStep("4", "选择格式", "需要完整备份时选“未修改的原始文件”；需要 Android 兼容性时选“兼容性最好”。")
-        GuideStep("5", "返回并导入", "下载结束后返回本 App，从系统文件选择器中选择 ZIP、照片或视频。")
-        GuideStep("6", "查看结果", "App 会在本机完成校验、解压、去重，并写入 DCIM 下的目标相册。")
-        HorizontalDivider()
-        Text(
-            "提示：App 不会自动删除浏览器下载的 ZIP，也不会修改或删除 iCloud 云端照片。",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-    }
-}
-
-@Composable
-private fun GuideStep(number: String, title: String, body: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        Box(
-            modifier = Modifier.size(32.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(number, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-        }
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text(body, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -395,13 +352,35 @@ private fun SettingsPage(
     modifier: Modifier,
     albumName: String,
     onSaveAlbumName: (String) -> Unit,
+    onClearICloudSession: () -> Unit,
 ) {
     var value by remember(albumName) { mutableStateOf(albumName) }
+    var showClearSessionDialog by remember { mutableStateOf(false) }
+    if (showClearSessionDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearSessionDialog = false },
+            title = { Text("退出 iCloud 登录？") },
+            text = { Text("将清除 App 内嵌网页的 Cookie 和站点数据。已经下载到设备的文件不会被删除。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onClearICloudSession()
+                    showClearSessionDialog = false
+                }) { Text("清除并退出") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearSessionDialog = false }) { Text("取消") }
+            },
+        )
+    }
     Column(
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("保存位置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text("云盘下载位置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text("所有文件按原格式保存到系统公共目录 Download/iCloud Drive/，可在系统“文件”或“下载”中查看。")
+        Text("照片和视频不会自动写入 DCIM；需要进入系统相册时，再使用“导入”功能。")
+        HorizontalDivider()
+        Text("照片导入位置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         OutlinedTextField(
             value = value,
             onValueChange = { value = it.take(64) },
@@ -415,11 +394,17 @@ private fun SettingsPage(
         }
         HorizontalDivider()
         Text("隐私与安全", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text("登录入口固定为 iCloud 中国区 www.icloud.com.cn；中国大陆 iCloud 由云上贵州运营。")
-        Text("照片只在本机处理；App 不接收 Apple 登录信息，也不会把照片上传到服务器。")
+        Text("登录入口固定为 iCloud 中国区 www.icloud.com.cn；网页内容和登录表单由 Apple/云上贵州提供。")
+        Text("App 不主动读取或保存密码、验证码；下载请求使用内嵌网页当前会话交给 Android 系统下载服务。")
+        OutlinedButton(
+            onClick = { showClearSessionDialog = true },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("清除 iCloud 登录数据")
+        }
         Text("本产品为独立第三方工具，与 Apple Inc. 无关联或授权关系。")
         Spacer(Modifier.height(8.dp))
-        Text("版本 0.1.0", style = MaterialTheme.typography.bodySmall)
+        Text("版本 ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -434,8 +419,8 @@ private fun EmptyHistoryCard() {
 }
 
 private fun sectionTitle(section: MainSection): String = when (section) {
-    MainSection.HOME -> "照片导入助手"
-    MainSection.GUIDE -> "下载指南"
+    MainSection.CLOUD_DRIVE -> "iCloud 中国区云盘"
+    MainSection.IMPORT -> "照片导入（可选）"
     MainSection.HISTORY -> "导入历史"
     MainSection.SETTINGS -> "设置"
 }
