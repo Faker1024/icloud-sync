@@ -1,0 +1,3 @@
+-keepattributes *Annotation*
+-keep class androidx.room.RoomDatabase { *; }
+-dontwarn javax.annotation.**

@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.ICloudSync" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:navigationBarColor">#101318</item>
+        <item name="android:statusBarColor">#101318</item>
+    </style>
+</resources>

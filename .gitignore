@@ -4,6 +4,7 @@
 
 # Gradle
 .gradle/
+.kotlin/
 build/
 **/build/
 
@@ -19,6 +20,7 @@ secrets.properties
 # Native build output
 .cxx/
 .externalNativeBuild/
+captures/
 
 # macOS
 .DS_Store
