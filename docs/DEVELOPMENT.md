@@ -1,4 +1,4 @@
-# iCloud 照片下载助手：开发设计文档
+# iCloud 中国区照片下载助手：开发设计文档
 
 > 文档状态：MVP 开发基线<br>
 > 最后更新：2026-08-21<br>
@@ -6,9 +6,9 @@
 
 ## 1. 项目概述
 
-本项目是一款 Android 端的 iCloud 照片网页下载助手。
+本项目是一款面向中国大陆 Apple 账户的 Android 端 iCloud 照片网页下载助手。
 
-用户在 Apple 官方 `icloud.com/photos` 页面中完成登录、双重认证、照片选择和下载；本 App 不接入非公开 iCloud API，不读取 Apple 账户凭据，不自动抓取网页内容。App 负责把浏览器下载的 ZIP、照片或视频导入 Android，完成校验、解压、去重、归档、进度展示和历史记录。
+用户在中国区官方 `https://www.icloud.com.cn/photos/` 页面中完成登录、隐私声明确认、双重认证、照片选择和下载；本 App 不接入非公开 iCloud API，不读取 Apple 账户凭据，不自动抓取网页内容。App 负责把浏览器下载的 ZIP、照片或视频导入 Android，完成校验、解压、去重、归档、进度展示和历史记录。中国大陆 iCloud 由云上贵州运营。
 
 产品定位必须使用“网页下载助手”或“照片导入助手”，不得宣传为实时同步、自动同步或官方 iCloud Android 客户端。
 
@@ -16,7 +16,7 @@
 
 ### 2.1 MVP 目标
 
-- 安全地打开 Apple 官方 iCloud Photos 网页。
+- 安全地打开 iCloud 中国区官方照片网页。
 - 引导用户在网页中选择并下载照片或视频。
 - 通过 Android 系统文件选择器接收下载文件。
 - 支持导入 ZIP、单张照片和单个视频。
@@ -42,8 +42,8 @@
 
 ```mermaid
 flowchart LR
-    A[App 首页] --> B[Custom Tab 打开 iCloud Photos]
-    B --> C[用户在 Apple 网页登录并下载]
+    A[App 首页] --> B[Custom Tab 打开 iCloud 中国区照片页]
+    B --> C[用户登录、验证并下载]
     C --> D[返回 App]
     D --> E[系统文件选择器选择 ZIP 或媒体]
     E --> F[预检与暂存]
@@ -55,9 +55,9 @@ flowchart LR
 
 标准操作步骤：
 
-1. 用户点击“打开 iCloud 照片”。
-2. App 使用 Custom Tab 打开 `https://www.icloud.com/photos/`。
-3. 用户在 Apple 官方网页完成登录和双重认证。
+1. 用户点击“登录 iCloud 中国区”。
+2. App 使用 Custom Tab 打开 `https://www.icloud.com.cn/photos/`。
+3. 用户在中国区官方网页完成隐私声明确认、登录和双重认证。
 4. 用户选择照片或视频并触发下载。
 5. 用户返回 App，点击“导入下载文件”。
 6. App 使用 `ACTION_OPEN_DOCUMENT` 打开系统文件选择器。
@@ -65,7 +65,7 @@ flowchart LR
 8. App 完成暂存、预检、解压、扫描、去重和导入。
 9. App 显示新增、重复、失败和不支持文件数量。
 
-说明：Apple 当前允许用户在 iCloud.com 单批选择最多 1,000 个项目，并提供“未修改的原始文件”“最高分辨率”和“最兼容格式”等下载选项。该能力属于 Apple 网页，不能作为本 App 可控制的接口。
+说明：Apple 当前允许用户在 iCloud 网页单批选择最多 1,000 个项目，并提供“未修改的原片”“最高分辨率”和“兼容性最好”等下载选项。该能力属于 Apple 网页，不能作为本 App 可控制的接口。
 
 ## 4. 技术基线
 
@@ -130,14 +130,17 @@ UI 只订阅数据库和 Worker 状态。不要依赖 Activity 内存状态保�
 使用 `CustomTabsIntent` 打开固定白名单地址：
 
 ```text
-https://www.icloud.com/photos/
+https://www.icloud.com.cn/photos/
 ```
+
+本项目只面向中国大陆账户，白名单中仅保留 `.icloud.com.cn` 地址，不自动降级到国际区 `.icloud.com`。
 
 如 Custom Tab 不可用，则降级为系统 `ACTION_VIEW`。禁止把任意用户输入拼接到网址中。
 
 ### 6.2 安全边界
 
 - App 不声明或实现 Apple 登录表单。
+- App 只发起中国区官方域名，登录、隐私声明确认和双重认证均由该网页处理。
 - App 不读取浏览器 Cookie、网页内容或下载请求。
 - App 不判断用户是否成功登录。
 - App 不保存 Apple ID、电话号码或验证码。
@@ -672,7 +675,9 @@ FOREGROUND_SERVICE
 
 ## 25. 官方参考资料
 
-- [Apple：从 iCloud.com 下载照片和视频](https://support.apple.com/en-ie/111762)
+- [Apple：进一步了解 iCloud（中国大陆）](https://support.apple.com/zh-cn/111754)
+- [Apple：适用于中国客户的数据隐私声明](https://support.apple.com/zh-cn/121767)
+- [Apple：下载 iCloud 照片和视频](https://support.apple.com/zh-cn/111762)
 - [Android：Custom Tabs 和安全登录](https://developer.android.com/work/guide)
 - [Android：Storage Access Framework](https://developer.android.com/training/data-storage/shared/documents-files)
 - [Android：共享媒体与 MediaStore](https://developer.android.com/training/data-storage/shared/media)

@@ -47,7 +47,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun ICloudSyncApp(viewModel: MainViewModel = viewModel()) {
     val context = LocalContext.current
-    val iCloudPhotosUri = remember { "https://www.icloud.com/photos/".toUri() }
+    val iCloudPhotosUri = remember { CHINA_ICLOUD_PHOTOS_URL.toUri() }
     val documentLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -84,6 +84,8 @@ private fun ICloudSyncApp(viewModel: MainViewModel = viewModel()) {
         },
     )
 }
+
+private const val CHINA_ICLOUD_PHOTOS_URL = "https://www.icloud.com.cn/photos/"
 
 private val SUPPORTED_INPUT_TYPES = arrayOf(
     "application/zip",

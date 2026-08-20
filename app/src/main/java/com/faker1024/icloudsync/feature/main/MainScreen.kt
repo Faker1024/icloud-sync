@@ -148,7 +148,7 @@ private fun HomePage(
     ) {
         item {
             Text(
-                "从 Apple 官方网页下载，再安全导入到 Android 相册。",
+                "从 iCloud 中国区官方网页下载，再安全导入到 Android 相册。",
                 style = MaterialTheme.typography.bodyLarge,
             )
         }
@@ -157,7 +157,7 @@ private fun HomePage(
                 onClick = onOpenICloud,
                 modifier = Modifier.fillMaxWidth().height(52.dp),
             ) {
-                Text("1. 打开 iCloud 照片")
+                Text("1. 登录 iCloud 中国区")
             }
         }
         item {
@@ -248,11 +248,12 @@ private fun GuidePage(modifier: Modifier) {
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        GuideStep("1", "打开 iCloud 照片", "登录发生在 Apple 官方网页，App 不读取密码、验证码或 Cookie。")
-        GuideStep("2", "选择并下载", "在网页中选择照片或视频。Apple 网页单批最多可选择 1,000 项。")
-        GuideStep("3", "选择格式", "需要完整备份时选“未修改的原始文件”；需要 Android 兼容性时选“最兼容格式”。")
-        GuideStep("4", "返回并导入", "下载结束后返回本 App，从系统文件选择器中选择 ZIP、照片或视频。")
-        GuideStep("5", "查看结果", "App 会在本机完成校验、解压、去重，并写入 DCIM 下的目标相册。")
+        GuideStep("1", "打开 iCloud 中国区", "App 将打开 www.icloud.com.cn；中国大陆 iCloud 由云上贵州运营。")
+        GuideStep("2", "登录并验证", "使用中国大陆 Apple 账户登录，按页面提示完成隐私声明确认和双重认证。App 不读取密码、验证码或 Cookie。")
+        GuideStep("3", "选择并下载", "在网页中选择照片或视频。Apple 网页单批最多可选择 1,000 项。")
+        GuideStep("4", "选择格式", "需要完整备份时选“未修改的原始文件”；需要 Android 兼容性时选“兼容性最好”。")
+        GuideStep("5", "返回并导入", "下载结束后返回本 App，从系统文件选择器中选择 ZIP、照片或视频。")
+        GuideStep("6", "查看结果", "App 会在本机完成校验、解压、去重，并写入 DCIM 下的目标相册。")
         HorizontalDivider()
         Text(
             "提示：App 不会自动删除浏览器下载的 ZIP，也不会修改或删除 iCloud 云端照片。",
@@ -414,6 +415,7 @@ private fun SettingsPage(
         }
         HorizontalDivider()
         Text("隐私与安全", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text("登录入口固定为 iCloud 中国区 www.icloud.com.cn；中国大陆 iCloud 由云上贵州运营。")
         Text("照片只在本机处理；App 不接收 Apple 登录信息，也不会把照片上传到服务器。")
         Text("本产品为独立第三方工具，与 Apple Inc. 无关联或授权关系。")
         Spacer(Modifier.height(8.dp))
@@ -426,7 +428,7 @@ private fun EmptyHistoryCard() {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("还没有导入任务", fontWeight = FontWeight.SemiBold)
-            Text("先打开 iCloud 网页下载照片，然后返回这里选择下载文件。")
+            Text("先登录 iCloud 中国区网页下载照片，然后返回这里选择下载文件。")
         }
     }
 }
