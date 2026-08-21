@@ -21,6 +21,7 @@ import javax.inject.Singleton
 import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
@@ -35,6 +36,8 @@ data class DownloadStoreResult(
 class ICloudDownloadStore @Inject constructor(
     @param:ApplicationContext private val context: Context,
 ) {
+    private val modifiedTimeMutex = Mutex()
+
     internal suspend fun save(
         item: ICloudDriveItem,
         directories: List<String>,
@@ -166,41 +169,46 @@ class ICloudDownloadStore @Inject constructor(
         mimeType: String,
     ) {
         val desiredSeconds = remoteSeconds ?: return
-        val resolver = context.contentResolver
-        val file = resolveFilesystemFile(uri)
-        val filesystemMatches =
-            modifiedTimeMatches(file.lastModified() / MILLIS_PER_SECOND, desiredSeconds)
-        if (!filesystemMatches) setFilesystemModifiedTime(file, desiredSeconds)
-        if (filesystemMatches && modifiedTimeMatches(indexedSeconds, desiredSeconds)) return
+        modifiedTimeMutex.lock()
+        try {
+            val resolver = context.contentResolver
+            val file = resolveFilesystemFile(uri)
+            val filesystemMatches =
+                modifiedTimeMatches(file.lastModified() / MILLIS_PER_SECOND, desiredSeconds)
+            if (!filesystemMatches) setFilesystemModifiedTime(file, desiredSeconds)
+            if (filesystemMatches && modifiedTimeMatches(indexedSeconds, desiredSeconds)) return
 
-        // Some MediaProvider versions accept this owner-only update even though the column is
-        // documented as read-only. The filesystem timestamp above remains the source of truth.
-        runCatching {
-            resolver.update(
-                uri,
-                ContentValues().apply { put(MediaStore.MediaColumns.DATE_MODIFIED, desiredSeconds) },
-                null,
-                null,
-            )
-        }
-        if (!modifiedTimeMatches(readIndexedModifiedTime(uri), desiredSeconds)) {
-            withTimeout(MEDIA_SCAN_TIMEOUT_MILLIS) {
-                suspendCancellableCoroutine { continuation ->
-                    MediaScannerConnection.scanFile(
-                        context,
-                        arrayOf(file.absolutePath),
-                        arrayOf(mimeType),
-                    ) { _, _ ->
-                        if (continuation.isActive) continuation.resume(Unit)
+            // Some MediaProvider versions accept this owner-only update even though the column is
+            // documented as read-only. The filesystem timestamp above remains the source of truth.
+            runCatching {
+                resolver.update(
+                    uri,
+                    ContentValues().apply { put(MediaStore.MediaColumns.DATE_MODIFIED, desiredSeconds) },
+                    null,
+                    null,
+                )
+            }
+            if (!modifiedTimeMatches(readIndexedModifiedTime(uri), desiredSeconds)) {
+                withTimeout(MEDIA_SCAN_TIMEOUT_MILLIS) {
+                    suspendCancellableCoroutine { continuation ->
+                        MediaScannerConnection.scanFile(
+                            context,
+                            arrayOf(file.absolutePath),
+                            arrayOf(mimeType),
+                        ) { _, _ ->
+                            if (continuation.isActive) continuation.resume(Unit)
+                        }
                     }
                 }
             }
-        }
-        check(modifiedTimeMatches(readIndexedModifiedTime(uri), desiredSeconds)) {
-            "Android 未能刷新 iCloud 文件修改时间"
-        }
-        check(modifiedTimeMatches(file.lastModified() / MILLIS_PER_SECOND, desiredSeconds)) {
-            "Android 未能保留 iCloud 文件修改时间"
+            check(modifiedTimeMatches(readIndexedModifiedTime(uri), desiredSeconds)) {
+                "Android 未能刷新 iCloud 文件修改时间"
+            }
+            check(modifiedTimeMatches(file.lastModified() / MILLIS_PER_SECOND, desiredSeconds)) {
+                "Android 未能保留 iCloud 文件修改时间"
+            }
+        } finally {
+            modifiedTimeMutex.unlock()
         }
     }
 

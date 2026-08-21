@@ -21,10 +21,17 @@ import com.faker1024.icloudsync.core.sync.FolderSyncStage
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.ArrayDeque
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import org.json.JSONArray
 
 @HiltWorker
@@ -96,86 +103,117 @@ class FolderSyncWorker @AssistedInject constructor(
         return files
     }
 
-    private suspend fun downloadFiles(files: List<RemoteFile>, rootFolderName: String): Result {
+    private suspend fun downloadFiles(files: List<RemoteFile>, rootFolderName: String): Result = coroutineScope {
         val totalBytes = files.fold(0L) { total, file -> safeAdd(total, file.item.size.coerceAtLeast(0L)) }
-        var completedFiles = 0
-        var completedBytes = 0L
-        val failures = mutableListOf<String>()
+        val completedFiles = AtomicInteger(0)
+        val completedBytes = AtomicLong(0L)
+        val failedFiles = AtomicInteger(0)
+        val failures = ConcurrentLinkedQueue<String>()
+        val progressMutex = Mutex()
         if (files.isEmpty()) {
             updateProgress(stage = FolderSyncStage.COMPLETE, totalFiles = 0, completedFiles = 0)
             notifyFinished(rootFolderName, 0, success = true, message = "文件夹为空，无需下载")
-            return Result.success(successData(0, 0L))
+            return@coroutineScope Result.success(successData(0, 0L))
         }
 
-        files.forEach { remote ->
+        suspend fun publishProgress(currentFile: String) {
+            progressMutex.lock()
+            try {
+                val completed = completedFiles.get()
+                val failed = failedFiles.get()
+                val bytes = completedBytes.get()
+                updateProgress(
+                    stage = FolderSyncStage.DOWNLOADING,
+                    totalFiles = files.size,
+                    completedFiles = completed,
+                    failedFiles = failed,
+                    totalBytes = totalBytes,
+                    completedBytes = bytes,
+                    currentFile = currentFile,
+                )
+                setForeground(
+                    foregroundInfo(
+                        stage = FolderSyncStage.DOWNLOADING,
+                        folderName = rootFolderName,
+                        totalFiles = files.size,
+                        completedFiles = completed,
+                        failedFiles = failed,
+                        currentFile = currentFile,
+                    ),
+                )
+            } finally {
+                progressMutex.unlock()
+            }
+        }
+
+        suspend fun downloadFile(remote: RemoteFile) {
             currentCoroutineContext().ensureActive()
             val fileName = remote.item.name.take(MAX_PROGRESS_FILE_NAME)
-            updateProgress(
-                stage = FolderSyncStage.DOWNLOADING,
-                totalFiles = files.size,
-                completedFiles = completedFiles,
-                failedFiles = failures.size,
-                totalBytes = totalBytes,
-                completedBytes = completedBytes,
-                currentFile = fileName,
-            )
-            val outcome = runCatching {
-                retryOperation { repository.saveSyncedFile(remote.item, remote.localPath) }
-            }
-            outcome.onSuccess { saved ->
-                completedFiles++
-                completedBytes = safeAdd(completedBytes, saved.bytes)
-            }.onFailure { error ->
+            publishProgress(fileName)
+            try {
+                val saved = retryOperation {
+                    repository.saveSyncedFile(remote.item, remote.localPath)
+                }
+                completedFiles.incrementAndGet()
+                completedBytes.updateAndGet { current -> safeAdd(current, saved.bytes) }
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Throwable) {
                 if (!error.isRetryable()) throw error
                 failures += fileName
+                failedFiles.incrementAndGet()
             }
-            updateProgress(
-                stage = FolderSyncStage.DOWNLOADING,
-                totalFiles = files.size,
-                completedFiles = completedFiles,
-                failedFiles = failures.size,
-                totalBytes = totalBytes,
-                completedBytes = completedBytes,
-                currentFile = fileName,
-            )
-            setForeground(
-                foregroundInfo(
-                    stage = FolderSyncStage.DOWNLOADING,
-                    folderName = rootFolderName,
-                    totalFiles = files.size,
-                    completedFiles = completedFiles,
-                    failedFiles = failures.size,
-                    currentFile = fileName,
-                ),
-            )
+            publishProgress(fileName)
         }
 
-        if (failures.isNotEmpty()) {
+        val queue = Channel<RemoteFile>(capacity = DOWNLOAD_CONCURRENCY * 2)
+        val workers = List(minOf(DOWNLOAD_CONCURRENCY, files.size)) {
+            launch {
+                for (remote in queue) downloadFile(remote)
+            }
+        }
+        try {
+            files.forEach { queue.send(it) }
+        } finally {
+            queue.close()
+        }
+        workers.forEach { it.join() }
+
+        val completedFileCount = completedFiles.get()
+        val completedByteCount = completedBytes.get()
+        val failedFileCount = failedFiles.get()
+        if (failedFileCount > 0) {
             if (runAttemptCount < MAX_TASK_RETRIES) {
                 updateProgress(
                     stage = FolderSyncStage.RETRYING,
                     totalFiles = files.size,
-                    completedFiles = completedFiles,
-                    failedFiles = failures.size,
+                    completedFiles = completedFileCount,
+                    failedFiles = failedFileCount,
                     totalBytes = totalBytes,
-                    completedBytes = completedBytes,
-                    currentFile = "${failures.size} 个文件失败，系统将自动重试",
+                    completedBytes = completedByteCount,
+                    currentFile = "$failedFileCount 个文件失败，系统将自动重试",
                 )
-                return Result.retry()
+                return@coroutineScope Result.retry()
             }
-            val message = "仍有 ${failures.size} 个文件未能下载：${failures.take(3).joinToString("、")}"
-            return fail(message, rootFolderName, files.size, completedFiles, failures.size)
+            val message = "仍有 $failedFileCount 个文件未能下载：${failures.take(3).joinToString("、")}"
+            return@coroutineScope fail(
+                message,
+                rootFolderName,
+                files.size,
+                completedFileCount,
+                failedFileCount,
+            )
         }
 
         updateProgress(
             stage = FolderSyncStage.COMPLETE,
             totalFiles = files.size,
-            completedFiles = completedFiles,
+            completedFiles = completedFileCount,
             totalBytes = totalBytes,
-            completedBytes = completedBytes,
+            completedBytes = completedByteCount,
         )
-        notifyFinished(rootFolderName, completedFiles, success = true, message = "所有文件均已校验并保存")
-        return Result.success(successData(completedFiles, completedBytes))
+        notifyFinished(rootFolderName, completedFileCount, success = true, message = "所有文件均已校验并保存")
+        Result.success(successData(completedFileCount, completedByteCount))
     }
 
     private suspend fun <T> retryOperation(block: suspend () -> T): T {
@@ -330,6 +368,7 @@ class FolderSyncWorker @AssistedInject constructor(
         const val KEY_LOCAL_PATH_JSON = "local_path_json"
         private const val MAX_FILES_PER_SYNC = 100_000
         private const val PER_OPERATION_ATTEMPTS = 3
+        private const val DOWNLOAD_CONCURRENCY = 3
         private const val MAX_TASK_RETRIES = 5
         private const val PER_OPERATION_RETRY_DELAY_MS = 1_000L
         private const val MAX_PROGRESS_FILE_NAME = 160
