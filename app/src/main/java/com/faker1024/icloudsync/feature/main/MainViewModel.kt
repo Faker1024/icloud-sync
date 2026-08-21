@@ -1,11 +1,14 @@
 package com.faker1024.icloudsync.feature.main
 
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.faker1024.icloudsync.core.database.ImportBatchEntity
 import com.faker1024.icloudsync.core.database.ImportedMediaEntity
 import com.faker1024.icloudsync.core.importer.ImportRepository
+import com.faker1024.icloudsync.core.local.SyncedFile
+import com.faker1024.icloudsync.core.local.SyncedFileRepository
 import com.faker1024.icloudsync.core.settings.ImportSettings
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -18,6 +21,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -25,6 +29,7 @@ import kotlinx.coroutines.launch
 class MainViewModel @Inject constructor(
     private val repository: ImportRepository,
     private val settings: ImportSettings,
+    private val syncedFileRepository: SyncedFileRepository,
 ) : ViewModel() {
     val batches: StateFlow<List<ImportBatchEntity>> = repository.observeRecentBatches()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -45,6 +50,13 @@ class MainViewModel @Inject constructor(
 
     private val eventChannel = Channel<MainEvent>(Channel.BUFFERED)
     val events = eventChannel.receiveAsFlow()
+    private val _syncedFiles = MutableStateFlow(SyncedFilesUiState())
+    val syncedFiles: StateFlow<SyncedFilesUiState> = _syncedFiles
+    private var syncedFilesRefreshJob: Job? = null
+
+    init {
+        refreshSyncedFiles()
+    }
 
     fun enqueueImport(uri: Uri) {
         viewModelScope.launch {
@@ -83,7 +95,42 @@ class MainViewModel @Inject constructor(
             eventChannel.send(MainEvent.Message("相册名称已保存"))
         }
     }
+
+    fun refreshSyncedFiles() {
+        syncedFilesRefreshJob?.cancel()
+        syncedFilesRefreshJob = viewModelScope.launch {
+            _syncedFiles.value = _syncedFiles.value.copy(isLoading = true, error = null)
+            runCatching { syncedFileRepository.listFiles() }
+                .onSuccess { files ->
+                    _syncedFiles.value = SyncedFilesUiState(files = files)
+                }
+                .onFailure {
+                    _syncedFiles.value = _syncedFiles.value.copy(
+                        isLoading = false,
+                        error = "无法读取 Download/iCloud Drive/，请稍后重试",
+                    )
+                }
+        }
+    }
+
+    suspend fun loadSyncedImage(file: SyncedFile, targetPixels: Int): Bitmap =
+        syncedFileRepository.loadImage(file, targetPixels)
+
+    fun openSyncedFile(file: SyncedFile) {
+        syncedFileRepository.openExternally(file)
+            .onFailure {
+                viewModelScope.launch {
+                    eventChannel.send(MainEvent.Message("没有可打开此文件的应用，或文件已被移除"))
+                }
+            }
+    }
 }
+
+data class SyncedFilesUiState(
+    val files: List<SyncedFile> = emptyList(),
+    val isLoading: Boolean = false,
+    val error: String? = null,
+)
 
 sealed interface MainEvent {
     data class Message(val text: String) : MainEvent

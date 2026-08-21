@@ -19,6 +19,7 @@
 - 全局采用接近 iOS Files 的视觉语言：系统蓝主色、分组灰背景、白色圆角浮层、矢量文件图标、胶囊状态和半透明风格导航；完整支持深色模式与系统字体缩放。
 - 单文件下载继续交给 Android `DownloadManager`；长按文件夹可递归同步全部文件并保留目录层级。
 - 文件夹同步由 WorkManager 在后台执行，逐文件原子写入、字节数校验、即时重试和指数退避任务重试。
+- “本地”标签页直接浏览 `Download/iCloud Drive/` 中已经同步的目录和文件；图片显示本地缩略图并可在 App 内全屏预览，其他格式可安全交给已安装的查看器打开。
 - 下载地址强制 HTTPS 并执行 Apple/iCloud 主机白名单校验。
 - 原始文件保存到公共目录 `Download/iCloud Drive/`，不把非媒体文件写入图库。
 - 会话令牌和 Cookie 使用 Android Keystore AES-GCM 加密保存，可随时退出并清除。
@@ -33,6 +34,7 @@
 | 双重认证验证码 | 仅用于本次验证，不保存 |
 | 会话令牌和 Cookie | Android Keystore AES-GCM 加密后保存在 App 私有空间 |
 | 云盘原始文件 | `Download/iCloud Drive/`；文件夹同步保留其云端层级 |
+| 已同步文件索引 | 直接读取 Android MediaStore，不复制文件、不额外保存路径数据库 |
 | 图片预览缓存 | App 私有缓存；退出 iCloud 登录时清除 |
 | 用户主动导入的照片/视频 | `DCIM/iCloud Photos/` |
 | 文件与账户数据 | 全程设备直连 iCloud，不经过开发者服务器 |

@@ -73,6 +73,7 @@ import kotlinx.coroutines.launch
 
 private enum class MainSection(val label: String) {
     CLOUD_DRIVE("云盘"),
+    LOCAL_FILES("本地"),
     IMPORT("导入"),
     HISTORY("历史"),
     SETTINGS("设置"),
@@ -90,6 +91,7 @@ fun MainScreen(
     val albumName by viewModel.albumName.collectAsStateWithLifecycle()
     val selectedBatchId by viewModel.selectedBatchId.collectAsStateWithLifecycle()
     val selectedBatchItems by viewModel.selectedBatchItems.collectAsStateWithLifecycle()
+    val syncedFiles by viewModel.syncedFiles.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var section by rememberSaveable { mutableStateOf(MainSection.CLOUD_DRIVE) }
@@ -100,6 +102,9 @@ fun MainScreen(
                 is MainEvent.Message -> snackbarHostState.showSnackbar(event.text)
             }
         }
+    }
+    LaunchedEffect(section) {
+        if (section == MainSection.LOCAL_FILES) viewModel.refreshSyncedFiles()
     }
 
     Scaffold(
@@ -162,6 +167,14 @@ fun MainScreen(
                     scope.launch { snackbarHostState.showSnackbar(message) }
                 },
                 onSyncFolder = onSyncFolder,
+            )
+
+            MainSection.LOCAL_FILES -> SyncedFilesPage(
+                modifier = Modifier.padding(padding),
+                state = syncedFiles,
+                onRefresh = viewModel::refreshSyncedFiles,
+                onOpenFile = viewModel::openSyncedFile,
+                loadImage = viewModel::loadSyncedImage,
             )
 
             MainSection.IMPORT -> ImportPage(
@@ -479,7 +492,7 @@ private fun SettingsPage(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text("iCloud Drive 下载", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "原始文件保存在 Download/iCloud Drive/，文件夹同步会保留云端层级。",
+                        "原始文件保存在 Download/iCloud Drive/，文件夹同步会保留云端层级，并可在“本地”标签页直接查看。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -591,6 +604,7 @@ private fun EmptyHistoryCard() {
 
 private fun sectionTitle(section: MainSection): String = when (section) {
     MainSection.CLOUD_DRIVE -> "iCloud 中国区云盘"
+    MainSection.LOCAL_FILES -> "本地文件"
     MainSection.IMPORT -> "照片导入（可选）"
     MainSection.HISTORY -> "导入历史"
     MainSection.SETTINGS -> "设置"
@@ -598,7 +612,8 @@ private fun sectionTitle(section: MainSection): String = when (section) {
 
 private fun mainSectionIcon(section: MainSection): ImageVector = when (section) {
     MainSection.CLOUD_DRIVE -> Icons.Rounded.Cloud
-    MainSection.IMPORT -> Icons.Rounded.Download
+    MainSection.LOCAL_FILES -> Icons.Rounded.Folder
+    MainSection.IMPORT -> Icons.Rounded.PhotoLibrary
     MainSection.HISTORY -> Icons.Rounded.History
     MainSection.SETTINGS -> Icons.Rounded.Settings
 }

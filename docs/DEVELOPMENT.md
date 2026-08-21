@@ -2,7 +2,7 @@
 
 > 文档状态：原生 UI / 私有 Web 接口 MVP<br>
 > 最后更新：2026-08-21<br>
-> 当前版本：0.7.0
+> 当前版本：0.8.0
 
 ## 1. 产品定义
 
@@ -18,6 +18,7 @@
 - 显示图片缩略图并在 App 内打开图片预览。
 - 提供可持久化的列表/网格布局、图标尺寸和多种排序设置。
 - 用户主动下载单个文件，或长按文件夹递归同步到 `Download/iCloud Drive/`。
+- 在 App 的“本地”标签页浏览已经下载或同步的文件，图片可显示缩略图并全屏预览。
 - 密码不落盘、不明文发送；会话令牌和 Cookie 加密保存。
 - 保留照片、视频或 ZIP 到系统相册的可选导入功能。
 
@@ -74,6 +75,7 @@ flowchart LR
 | 会话加密 | Android Keystore AES-256-GCM |
 | 通用下载 | 单文件使用 Android DownloadManager；文件夹使用 WorkManager + MediaStore |
 | 图片预览 | App 私有磁盘缓存、BitmapFactory 尺寸采样、内存 LRU |
+| 本地文件浏览 | MediaStore Downloads 查询、虚拟目录树、ImageDecoder 目标尺寸解码与 64 MiB 内存缓存 |
 | 媒体导入 | SAF、WorkManager、MediaStore |
 | 本地数据 | Room、DataStore |
 | 注入 | Hilt |
@@ -93,6 +95,10 @@ core/icloud/
 core/sync/
 ├── FolderSyncCoordinator.kt # 唯一任务、网络约束、退避策略和状态观察
 └── ICloudDownloadStore.kt   # Downloads 目录层级、原子写入和完整性校验
+
+core/local/
+├── SyncedFileModels.kt      # 本地文件、虚拟文件夹和路径边界
+└── SyncedFileRepository.kt  # MediaStore 扫描、图片解码和安全打开
 
 core/worker/
 └── FolderSyncWorker.kt      # 递归扫描、文件级重试、任务级恢复和通知
@@ -223,6 +229,12 @@ Download/iCloud Drive/
 
 任务上限为 100,000 个文件，防止异常目录响应耗尽内存。MediaStore 不能单独发布完全空的目录，因此只有包含文件的目录会在公共 Downloads 中出现。当前同步是用户发起的单向下载快照，不删除本地多余文件，也不监控之后的云端变化。
 
+### 5.6 已同步文件浏览与本地图片预览
+
+“本地”标签页查询 MediaStore Downloads 中 `RELATIVE_PATH` 位于 `Download/iCloud Drive/` 的已发布条目，不申请“所有文件访问”权限，也不复制一份文件索引。查询结果按 `RELATIVE_PATH` 还原为只读虚拟目录树；用户在系统文件管理器中移动或删除文件后，刷新即可反映最新状态。
+
+图片类型由 MIME 与扩展名共同识别，通过 `content://` URI 和 `ImageDecoder` 按目标尺寸解码，缩略图与全屏图分别使用不同缓存键，内存缓存上限 64 MiB。解码错误只显示类型图标或错误提示，不影响其他文件浏览。非图片文件使用带临时只读授权的 `ACTION_VIEW` 打开，不暴露真实文件路径；设备没有兼容查看器或文件已移除时，在 App 内显示明确提示。
+
 ## 6. UI 状态机
 
 | 状态 | UI |
@@ -299,6 +311,7 @@ Download/iCloud Drive/
 - 下载域名精确后缀校验和相似域名绕过。
 - 文件名清理、长度和同名策略。
 - 云端图片扩展名识别、布局尺寸边界、四种排序及方向、文件夹优先和同步目录清理。
+- MediaStore 相对路径边界、本地虚拟目录分组和无 MIME 图片扩展名识别。
 - 原有 ZIP 路径、媒体识别、哈希与设置测试。
 - Debug 单元测试、Lint 和 APK 构建。
 
@@ -312,6 +325,7 @@ Download/iCloud Drive/
 - 根目录、深层目录、空目录、中文/Emoji/超长文件名。
 - PDF、Office、ZIP、图片、视频和 iWork package 下载。
 - 缩略图、全屏预览、列表/网格切换、四种升降序排序和 48–144 dp 图标尺寸持久化。
+- 已同步文件目录还原、本地图片缩略图/全屏预览、外部删除后刷新及非图片文件打开。
 - 长按文件夹同步、深层路径保留、重复任务去重、进程被杀后恢复和取消。
 - Wi-Fi/蜂窝网络切换、断网、空间不足、传输截断、自动重试和重复点击。
 - 中国区条款未确认、iCloud Drive 未开启、ADP 批准成功/拒绝/超时和关闭网页访问。
@@ -327,6 +341,7 @@ Download/iCloud Drive/
 - 可切换列表/网格、调整图标大小并选择名称/时间/大小/类型排序；设置在 App 重启后保留。
 - 可下载至少文档、压缩包、照片和视频；长按文件夹可保留层级递归同步。
 - 原始文件出现在 `Download/iCloud Drive/`，每项完整写入且字节数校验通过；失败项自动重试并不会被误报为完成。
+- “本地”标签页可逐层浏览已同步文件，图片在 App 内预览，非图片文件以临时只读 URI 交给系统查看器。
 - 密码/验证码不落盘；重启后仅通过 Keystore 加密会话恢复。
 - 非 HTTPS、白名单外域名和相似域名下载均被拒绝。
 - 退出登录后不能继续读取云盘，已下载文件保留。
