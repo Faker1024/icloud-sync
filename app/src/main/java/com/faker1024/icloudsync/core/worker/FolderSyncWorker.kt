@@ -16,6 +16,7 @@ import com.faker1024.icloudsync.core.icloud.ICloudApiException
 import com.faker1024.icloudsync.core.icloud.ICloudDriveItem
 import com.faker1024.icloudsync.core.icloud.ICloudDriveRepository
 import com.faker1024.icloudsync.core.icloud.ICloudError
+import com.faker1024.icloudsync.core.local.PRIVATE_DRIVE_DISPLAY_PATH
 import com.faker1024.icloudsync.core.sync.FolderSyncProgressKeys
 import com.faker1024.icloudsync.core.sync.FolderSyncStage
 import dagger.assisted.Assisted
@@ -329,7 +330,7 @@ class FolderSyncWorker @AssistedInject constructor(
         val notification = NotificationCompat.Builder(applicationContext, FolderSyncNotifications.CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(if (success) "$folderName 同步完成" else "$folderName 同步未完成")
-            .setContentText(if (success) "$count 个文件已保存到 Download/iCloud Drive/" else message)
+            .setContentText(if (success) "$count 个文件已保存到 $PRIVATE_DRIVE_DISPLAY_PATH" else message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
             .setAutoCancel(true)
             .build()

@@ -8,9 +8,11 @@ import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.provider.MediaStore
 import android.util.LruCache
+import android.webkit.MimeTypeMap
 import androidx.core.net.toUri
 import com.faker1024.icloudsync.core.database.SyncedFileMetadataDao
 import com.faker1024.icloudsync.core.database.SyncedFileMetadataEntity
+import com.faker1024.icloudsync.core.sync.buildDownloadRelativePath
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -29,8 +31,48 @@ class SyncedFileRepository @Inject constructor(
     }
 
     suspend fun listFiles(): List<SyncedFile> = withContext(Dispatchers.IO) {
-        val resolver = context.contentResolver
         val metadataByUri = metadataDao.listAll().associateBy(SyncedFileMetadataEntity::contentUri)
+        val privateFiles = listPrivateFiles(metadataByUri)
+        val privateKeys = privateFiles.mapTo(mutableSetOf()) { it.logicalKey() }
+        privateFiles + listPublicFiles(metadataByUri).filterNot { it.logicalKey() in privateKeys }
+    }
+
+    private fun listPrivateFiles(
+        metadataByUri: Map<String, SyncedFileMetadataEntity>,
+    ): List<SyncedFile> {
+        val root = privateDriveRoot(context)
+        if (!root.isDirectory) return emptyList()
+        return root.walkTopDown()
+            .filter { file -> file.isFile && !file.name.endsWith(PARTIAL_FILE_SUFFIX) }
+            .mapNotNull { file ->
+                val directories = privateDriveDirectories(root, file) ?: return@mapNotNull null
+                val contentUri = privateDriveUri(context, file).toString()
+                val relativePath = buildDownloadRelativePath(directories)
+                val size = file.length().coerceAtLeast(0L)
+                SyncedFile(
+                    id = contentUri.hashCode().toLong(),
+                    contentUri = contentUri,
+                    displayName = file.name,
+                    mimeType = mimeTypeFor(file.name),
+                    size = size,
+                    modifiedAtMillis = resolveSyncedModifiedAtMillis(
+                        indexedModifiedAtMillis = file.lastModified().coerceAtLeast(0L),
+                        metadata = metadataByUri[contentUri],
+                        contentUri = contentUri,
+                        displayName = file.name,
+                        relativePath = relativePath,
+                        size = size,
+                    ),
+                    directories = directories,
+                )
+            }
+            .toList()
+    }
+
+    private fun listPublicFiles(
+        metadataByUri: Map<String, SyncedFileMetadataEntity>,
+    ): List<SyncedFile> {
+        val resolver = context.contentResolver
         val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
         val projection = arrayOf(
             MediaStore.MediaColumns._ID,
@@ -44,7 +86,7 @@ class SyncedFileRepository @Inject constructor(
             "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?) AND " +
             "${MediaStore.MediaColumns.IS_PENDING} = 0"
         val arguments = arrayOf(SYNCED_FILES_PUBLIC_PATH, "$SYNCED_FILES_PUBLIC_PATH%")
-        buildList {
+        return buildList {
             resolver.query(
                 collection,
                 projection,
@@ -89,6 +131,11 @@ class SyncedFileRepository @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun mimeTypeFor(name: String): String? {
+        val extension = name.substringAfterLast('.', "").lowercase()
+        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
     }
 
     suspend fun loadImage(file: SyncedFile, targetPixels: Int): Bitmap = withContext(Dispatchers.IO) {
@@ -148,8 +195,12 @@ class SyncedFileRepository @Inject constructor(
         private const val MIN_IMAGE_TARGET = 96
         private const val MAX_IMAGE_TARGET = 4096
         private const val MILLIS_PER_SECOND = 1_000L
+        private const val PARTIAL_FILE_SUFFIX = ".part"
     }
 }
+
+private fun SyncedFile.logicalKey(): String =
+    directories.joinToString("/") + '\u0000' + displayName
 
 internal fun resolveSyncedModifiedAtMillis(
     indexedModifiedAtMillis: Long,

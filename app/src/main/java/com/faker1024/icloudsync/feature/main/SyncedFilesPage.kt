@@ -93,7 +93,7 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.net.toUri
-import com.faker1024.icloudsync.core.local.SYNCED_FILES_PUBLIC_PATH
+import com.faker1024.icloudsync.core.local.PRIVATE_DRIVE_DISPLAY_PATH
 import com.faker1024.icloudsync.core.local.SyncedBrowserEntry
 import com.faker1024.icloudsync.core.local.SyncedFile
 import com.faker1024.icloudsync.core.local.buildSyncedBrowserEntries
@@ -295,7 +295,7 @@ internal fun SyncedFilesPage(
                         style = MaterialTheme.typography.labelMedium,
                     )
                     Text(
-                        if (searchQuery.isBlank()) SYNCED_FILES_PUBLIC_PATH else "找到 ${entries.size} 项",
+                        if (searchQuery.isBlank()) PRIVATE_DRIVE_DISPLAY_PATH else "找到 ${entries.size} 项",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

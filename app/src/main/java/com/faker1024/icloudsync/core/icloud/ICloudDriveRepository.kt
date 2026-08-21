@@ -1,12 +1,8 @@
 package com.faker1024.icloudsync.core.icloud
 
-import android.content.Context
 import android.graphics.Bitmap
-import android.webkit.MimeTypeMap
 import com.faker1024.icloudsync.core.sync.DownloadStoreResult
 import com.faker1024.icloudsync.core.sync.ICloudDownloadStore
-import com.faker1024.icloudsync.core.web.CloudDriveDownloads
-import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -16,7 +12,6 @@ import kotlinx.coroutines.withContext
 @Singleton
 class ICloudDriveRepository @Inject internal constructor(
     private val api: ICloudApiClient,
-    @param:ApplicationContext private val context: Context,
     private val previewLoader: ICloudPreviewLoader,
     private val downloadStore: ICloudDownloadStore,
 ) {
@@ -40,14 +35,8 @@ class ICloudDriveRepository @Inject internal constructor(
         withContext(Dispatchers.IO) { api.listFolder(folderId) }
 
     suspend fun download(item: ICloudDriveItem): String = withContext(Dispatchers.IO) {
-        val ticket = api.downloadTicket(item)
-        CloudDriveDownloads.enqueue(
-            context = context,
-            url = ticket.url,
-            fileName = item.name,
-            mimeType = mimeTypeFor(item.name),
-            cookieHeader = ticket.cookieHeader,
-        ).getOrThrow()
+        saveSyncedFile(item, emptyList())
+        item.name
     }
 
     suspend fun loadImagePreview(item: ICloudDriveItem, targetPixels: Int): Bitmap =
@@ -63,7 +52,6 @@ class ICloudDriveRepository @Inject internal constructor(
         downloadStore.save(
             item = item,
             directories = directories,
-            fallbackMimeType = mimeTypeFor(item.name),
             sourceProvider = { api.openDownload(item) },
         )
     }
@@ -71,11 +59,6 @@ class ICloudDriveRepository @Inject internal constructor(
     fun logout() {
         api.logout()
         previewLoader.clear()
-    }
-
-    private fun mimeTypeFor(name: String): String {
-        val extension = name.substringAfterLast('.', "").lowercase()
-        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
     }
 
     companion object {

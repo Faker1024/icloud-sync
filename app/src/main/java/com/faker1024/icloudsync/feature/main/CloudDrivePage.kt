@@ -106,6 +106,7 @@ import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.TableChart
 import androidx.compose.material.icons.rounded.Tune
 import com.faker1024.icloudsync.core.icloud.ICloudDriveItem
+import com.faker1024.icloudsync.core.local.PRIVATE_DRIVE_DISPLAY_PATH
 import com.faker1024.icloudsync.core.icloud.TrustedPhone
 import com.faker1024.icloudsync.core.icloud.isPreviewableImage
 import com.faker1024.icloudsync.core.icloud.sortCloudDriveItems
@@ -431,7 +432,7 @@ private fun BrowserPage(
 
     pendingSyncFolder?.let { folder ->
         val relative = state.path.drop(1).map { it.name } + folder.name
-        val destination = "Download/iCloud Drive/${relative.joinToString("/")}/"
+        val destination = "$PRIVATE_DRIVE_DISPLAY_PATH${relative.joinToString("/")}/"
         AlertDialog(
             onDismissRequest = { pendingSyncFolder = null },
             title = { Text("同步“${folder.name}”到本地？") },
@@ -440,7 +441,7 @@ private fun BrowserPage(
                     Text("将递归下载文件夹内的全部文件，并保留云端目录层级。")
                     Text(destination, style = MaterialTheme.typography.bodySmall)
                     Text(
-                        "文件会先完整写入并校验字节数，再对系统可见；失败项会自动重试，已校验文件不会重复写入。",
+                        "文件会先完整写入 APP 私密目录并校验字节数，其他软件无法主动扫描；失败项会自动重试。",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -625,7 +626,7 @@ private fun BrowserPage(
                         modifier = Modifier.size(18.dp),
                     )
                     Text(
-                        "Download/iCloud Drive/",
+                        PRIVATE_DRIVE_DISPLAY_PATH,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

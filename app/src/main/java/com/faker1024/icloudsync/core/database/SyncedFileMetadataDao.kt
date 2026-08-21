@@ -13,6 +13,9 @@ interface SyncedFileMetadataDao {
     @Query("SELECT * FROM synced_file_metadata")
     suspend fun listAll(): List<SyncedFileMetadataEntity>
 
+    @Query("SELECT * FROM synced_file_metadata WHERE contentUri = :contentUri LIMIT 1")
+    suspend fun get(contentUri: String): SyncedFileMetadataEntity?
+
     @Query("DELETE FROM synced_file_metadata WHERE contentUri = :contentUri")
     suspend fun delete(contentUri: String)
 }

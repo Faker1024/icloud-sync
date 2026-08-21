@@ -17,13 +17,13 @@
 - 文件管理器支持列表/网格切换，缩略图与文件图标可在 48–144 dp 之间调整。
 - 支持按名称、修改时间、文件大小或文件类型升序/降序排列，文件夹始终优先；布局、尺寸和排序设置都会持久保存。
 - 全局采用接近 iOS Files 的视觉语言：系统蓝主色、分组灰背景、白色圆角浮层、矢量文件图标、胶囊状态和半透明风格导航；完整支持深色模式与系统字体缩放。
-- 单文件下载继续交给 Android `DownloadManager`；长按文件夹可递归同步全部文件并保留目录层级。
+- 单文件下载和文件夹同步都保存到 APP 内部私密目录；长按文件夹可递归同步全部文件并保留目录层级。
 - 文件夹同步由 WorkManager 在后台执行，默认以 3 路受限并发下载；每个文件独立进行原子写入、字节数校验和即时重试，任务失败后使用指数退避重试；重新同步时，大小匹配的旧文件无需建立下载连接即可记录 iCloud 原始修改时间。
-- “本地”标签页直接浏览 `Download/iCloud Drive/` 中已经同步的目录和文件；图片显示本地缩略图并可在 App 内全屏预览，其他格式可安全交给已安装的查看器打开。
+- “本地”标签页直接浏览私密目录中的同步文件；图片显示本地缩略图并可全屏预览，其他格式仅在用户主动操作时通过临时只读 URI 交给指定应用。
 - 本地文件支持当前目录搜索、列表/网格切换，以及按名称、修改时间、总大小或文件类型升降序排列；设置会独立持久化，大目录排序在后台线程完成。
 - 云端与本地图片查看器支持超大图分块解码、双指缩放、惯性拖动、双击放大、比例显示和一键复位；图片使用全屏沉浸式画布，工具栏自动隐藏并可单击唤出；可左右滑动浏览当前目录中的其他图片，本地文件还能使用其他 App 打开或分享。
 - 下载地址强制 HTTPS 并执行 Apple/iCloud 主机白名单校验。
-- 原始文件保存到公共目录 `Download/iCloud Drive/`，不把非媒体文件写入图库。
+- 原始文件不写入公共 Download 或 MediaStore，QQ、微信和系统相册无法主动扫描；设置页可将旧版公共文件逐个复制、SHA-256 校验后清理公共副本。
 - 会话令牌和 Cookie 使用 Android Keystore AES-GCM 加密保存，可随时退出并清除。
 - 可选通过系统文件选择器把照片、视频或 ZIP 导入 `DCIM/iCloud Photos/`。
 - ZIP 安全检查、SHA-256 去重、MediaStore 原子写入、Room 历史和 WorkManager 后台导入。
@@ -35,13 +35,13 @@
 | Apple 账户密码 | 仅在登录期间驻留内存，不保存 |
 | 双重认证验证码 | 仅用于本次验证，不保存 |
 | 会话令牌和 Cookie | Android Keystore AES-GCM 加密后保存在 App 私有空间 |
-| 云盘原始文件 | `Download/iCloud Drive/`；文件夹同步保留其云端层级 |
-| 已同步文件索引 | 文件与路径直接读取 Android MediaStore；Room 仅保存匹配文件的 iCloud 原始修改时间，不复制文件内容 |
+| 云盘原始文件 | APP 内部私密目录 `files/icloud-drive/`；文件夹同步保留云端层级，卸载 APP 时一并删除 |
+| 已同步文件索引 | 私密文件树提供路径与内容；Room 保存远端 ID 和 iCloud 原始修改时间 |
 | 图片预览缓存 | App 私有缓存；退出 iCloud 登录时清除 |
 | 用户主动导入的照片/视频 | `DCIM/iCloud Photos/` |
 | 文件与账户数据 | 全程设备直连 iCloud，不经过开发者服务器 |
 
-选择 Downloads 作为云盘默认位置，是因为 iCloud Drive 可能包含 PDF、Office 文档、压缩包和工程文件；照片导入系统相册是独立、可选的后续操作。
+私密目录不会发布到 MediaStore；需要发送、编辑或导入时，APP 只为用户选中的文件授予临时读取权限。照片导入系统相册是独立、可选的后续操作。
 
 ## 技术栈
 
@@ -49,7 +49,7 @@
 - MVVM、Coroutines、StateFlow
 - OkHttp、`org.json`
 - Android Keystore、SRP-6a（RFC 5054 2048-bit group / SHA-256）
-- Android DownloadManager、Storage Access Framework、MediaStore、WorkManager
+- Android FileProvider、Storage Access Framework、MediaStore、WorkManager
 - Room、DataStore、WorkManager、Hilt
 - `minSdk 29`、`compileSdk/targetSdk 36`
 
@@ -79,7 +79,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 高级数据保护账户必须开启“允许访问 iCloud 数据”，并在每次 Apple 要求时使用受信任设备批准临时访问。
 - 首次登录、双重认证和真实文件下载必须使用测试专用中国大陆 Apple 账户在真机验证；仓库与自动化测试不包含任何账户凭据。
 - 文件夹同步必须由用户长按主动发起；不执行定时增量检测、双向同步、云端删除或上传。
-- 文件夹同步会镜像包含文件的目录层级，但 Android MediaStore 无法单独发布完全空的目录。
+- 文件夹同步会镜像包含文件的目录层级；完全空的目录不会单独创建。
+- APP 私密目录会在卸载时由 Android 删除；需要长期独立保留的文件应先主动导出或分享。
 - Apple 下载接口没有为所有文件提供可验证内容哈希；App 以响应 `Content-Length`（缺失时使用云端大小）验证是否完整写入。
 - 如果账户尚未同意最新版 iCloud 中国区网页条款，需先在 Apple 官方入口完成同意。
 

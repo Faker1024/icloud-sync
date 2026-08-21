@@ -93,6 +93,7 @@ fun MainScreen(
     val selectedBatchItems by viewModel.selectedBatchItems.collectAsStateWithLifecycle()
     val syncedFiles by viewModel.syncedFiles.collectAsStateWithLifecycle()
     val localBrowserPreferences by viewModel.localBrowserPreferences.collectAsStateWithLifecycle()
+    val privateStorage by viewModel.privateStorage.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var section by rememberSaveable { mutableStateOf(MainSection.CLOUD_DRIVE) }
@@ -106,6 +107,7 @@ fun MainScreen(
     }
     LaunchedEffect(section) {
         if (section == MainSection.LOCAL_FILES) viewModel.refreshSyncedFiles()
+        if (section == MainSection.SETTINGS) viewModel.refreshPrivateStorageStatus()
     }
 
     Scaffold(
@@ -203,7 +205,10 @@ fun MainScreen(
             MainSection.SETTINGS -> SettingsPage(
                 modifier = Modifier.padding(padding),
                 albumName = albumName,
+                privateStorage = privateStorage,
                 onSaveAlbumName = viewModel::saveAlbumName,
+                onMigratePublicFiles = viewModel::migratePublicFiles,
+                onCancelMigration = viewModel::cancelPublicFileMigration,
                 onClearICloudSession = {
                     cloudDriveViewModel.logout()
                     scope.launch { snackbarHostState.showSnackbar("已清除本机 iCloud 登录会话") }
@@ -461,11 +466,38 @@ private fun HistoryPage(
 private fun SettingsPage(
     modifier: Modifier,
     albumName: String,
+    privateStorage: PrivateStorageUiState,
     onSaveAlbumName: (String) -> Unit,
+    onMigratePublicFiles: () -> Unit,
+    onCancelMigration: () -> Unit,
     onClearICloudSession: () -> Unit,
 ) {
     var value by remember(albumName) { mutableStateOf(albumName) }
     var showClearSessionDialog by remember { mutableStateOf(false) }
+    var showMigrationDialog by remember { mutableStateOf(false) }
+    if (showMigrationDialog) {
+        AlertDialog(
+            onDismissRequest = { showMigrationDialog = false },
+            title = { Text("迁移到私密存储？") },
+            text = {
+                Text(
+                    "将迁移 ${privateStorage.publicFileCount} 个公共文件" +
+                        "（${formatBytes(privateStorage.publicBytes)}）。每个文件复制并校验成功后，" +
+                        "才会删除 Download/iCloud Drive/ 中的对应公共文件。请确认该目录中的文件都需要迁移。\n\n" +
+                        "私密文件不会被 QQ、微信或系统相册扫描，但卸载本 APP 时也会被删除。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showMigrationDialog = false
+                    onMigratePublicFiles()
+                }) { Text("开始迁移") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMigrationDialog = false }) { Text("取消") }
+            },
+        )
+    }
     if (showClearSessionDialog) {
         AlertDialog(
             onDismissRequest = { showClearSessionDialog = false },
@@ -495,17 +527,70 @@ private fun SettingsPage(
             ) {
                 IosIconTile(Icons.Rounded.Folder, contentDescription = null)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text("iCloud Drive 下载", style = MaterialTheme.typography.titleSmall)
+                    Text("iCloud Drive 私密存储", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "原始文件保存在 Download/iCloud Drive/，文件夹同步会保留云端层级；可在“本地”标签页查看、搜索、排序、打开或分享。",
+                        "新下载和同步的文件只保存在 APP 内，不写入公共 Download 或 MediaStore，其他软件无法主动扫描。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
-                        "照片和视频只有在你主动导入时才会写入系统相册。",
+                        "只有主动选择“打开”“分享”或导入相册时，指定文件才会获得临时访问权限。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    when {
+                        privateStorage.isScanning -> {
+                            LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 6.dp))
+                            Text("正在检查旧版公共文件…", style = MaterialTheme.typography.bodySmall)
+                        }
+                        privateStorage.isMigrating -> {
+                            val total = privateStorage.migrationTotal.coerceAtLeast(1)
+                            LinearProgressIndicator(
+                                progress = { privateStorage.migrationCompleted.toFloat() / total },
+                                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                            )
+                            Text(
+                                "已完成 ${privateStorage.migrationCompleted}/${privateStorage.migrationTotal}" +
+                                    if (privateStorage.migrationFailed > 0) {
+                                        " · 暂时失败 ${privateStorage.migrationFailed}"
+                                    } else {
+                                        ""
+                                    },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            privateStorage.currentFile.takeIf(String::isNotBlank)?.let {
+                                Text(
+                                    it,
+                                    maxLines = 1,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(onClick = onCancelMigration) { Text("取消迁移") }
+                        }
+                        privateStorage.publicFileCount > 0 -> {
+                            Text(
+                                "检测到 ${privateStorage.publicFileCount} 个旧版公共文件" +
+                                    "（${formatBytes(privateStorage.publicBytes)}）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            OutlinedButton(
+                                onClick = { showMigrationDialog = true },
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            ) { Text("迁移并清理公共副本") }
+                        }
+                        else -> {
+                            Text(
+                                "没有检测到可被其他软件扫描的旧版公共副本。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    privateStorage.error?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
         }

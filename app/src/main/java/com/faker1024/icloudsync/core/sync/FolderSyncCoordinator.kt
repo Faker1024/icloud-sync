@@ -11,6 +11,7 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.faker1024.icloudsync.core.settings.CloudBrowserSettings
+import com.faker1024.icloudsync.core.local.PRIVATE_DRIVE_DISPLAY_PATH
 import com.faker1024.icloudsync.core.worker.FolderSyncWorker
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.MessageDigest
@@ -84,7 +85,7 @@ class FolderSyncCoordinator @Inject constructor(
     }
 
     private fun displayPath(localPath: List<String>): String = buildString {
-        append("Download/iCloud Drive/")
+        append(PRIVATE_DRIVE_DISPLAY_PATH)
         if (localPath.isNotEmpty()) append(localPath.joinToString("/")).append('/')
     }
 

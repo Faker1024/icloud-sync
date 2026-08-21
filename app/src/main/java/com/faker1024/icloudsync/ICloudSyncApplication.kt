@@ -36,7 +36,7 @@ class ICloudSyncApplication : Application(), Configuration.Provider {
             getString(R.string.folder_sync_notification_channel),
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "显示 iCloud 文件夹下载与校验进度"
+            description = "显示 iCloud 私密同步、校验与文件迁移进度"
             setShowBadge(false)
         }
         getSystemService(NotificationManager::class.java).createNotificationChannels(

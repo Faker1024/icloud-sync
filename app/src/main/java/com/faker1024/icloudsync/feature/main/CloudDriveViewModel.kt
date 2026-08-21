@@ -12,6 +12,7 @@ import com.faker1024.icloudsync.core.icloud.ICloudFolder
 import com.faker1024.icloudsync.core.icloud.ICloudLoginResult
 import com.faker1024.icloudsync.core.icloud.ICloudPcsPollResult
 import com.faker1024.icloudsync.core.icloud.TrustedPhone
+import com.faker1024.icloudsync.core.local.PRIVATE_DRIVE_DISPLAY_PATH
 import com.faker1024.icloudsync.core.settings.CloudBrowserLayout
 import com.faker1024.icloudsync.core.settings.CloudBrowserSettings
 import com.faker1024.icloudsync.core.settings.CloudSortDirection
@@ -68,7 +69,7 @@ class CloudDriveViewModel @Inject constructor(
                         id = syncId,
                         folderId = preferences.lastSyncFolderId.orEmpty(),
                         folderName = preferences.lastSyncFolderName ?: "iCloud 文件夹",
-                        displayPath = preferences.lastSyncDisplayPath ?: "Download/iCloud Drive/",
+                        displayPath = preferences.lastSyncDisplayPath ?: PRIVATE_DRIVE_DISPLAY_PATH,
                     )
                 }
             }
@@ -166,7 +167,7 @@ class CloudDriveViewModel @Inject constructor(
         _state.update { it.copy(downloadingIds = it.downloadingIds + item.id) }
         viewModelScope.launch {
             runCatching { repository.download(item) }
-                .onSuccess { fileName -> _events.emit("已开始下载 $fileName，保存至 Download/iCloud Drive/") }
+                .onSuccess { fileName -> _events.emit("$fileName 已保存到 APP 私密存储") }
                 .onFailure { error -> _events.emit(error.userMessage()) }
             _state.update { it.copy(downloadingIds = it.downloadingIds - item.id) }
         }
