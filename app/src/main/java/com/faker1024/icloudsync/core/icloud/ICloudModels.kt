@@ -22,8 +22,11 @@ data class TrustedPhone(
 
 sealed interface ICloudLoginResult {
     data object Authenticated : ICloudLoginResult
+    data object NeedsPcsApproval : ICloudLoginResult
     data class NeedsTwoFactor(val phones: List<TrustedPhone>) : ICloudLoginResult
 }
+
+enum class ICloudPcsPollResult { APPROVED, WAITING }
 
 internal data class ICloudSession(
     val appleId: String,

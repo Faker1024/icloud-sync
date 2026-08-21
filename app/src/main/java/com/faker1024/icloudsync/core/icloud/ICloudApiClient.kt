@@ -110,12 +110,8 @@ internal class ICloudApiClient @Inject constructor(
             412 -> {
                 postAuthJson("/repair/complete", JSONObject(), setOf(200))
                 accountLogin()
-                ICloudLoginResult.Authenticated
             }
-            else -> {
-                accountLogin()
-                ICloudLoginResult.Authenticated
-            }
+            else -> accountLogin()
         }
     }
 
@@ -142,7 +138,7 @@ internal class ICloudApiClient @Inject constructor(
         )
     }
 
-    fun verifyTwoFactor(code: String, phoneId: Int?) {
+    fun verifyTwoFactor(code: String, phoneId: Int?): ICloudLoginResult {
         require(code.matches(Regex("\\d{6}"))) { "请输入 6 位验证码" }
         val response = if (phoneId == null) {
             postAuthJson(
@@ -167,7 +163,30 @@ internal class ICloudApiClient @Inject constructor(
             Request.Builder().url("$AUTH_ENDPOINT/2sv/trust").get().header("Content-Length", "0"),
             accepted = setOf(200, 204),
         )
-        accountLogin()
+        return accountLogin()
+    }
+
+    fun needsPcsApproval(): Boolean {
+        val active = requireSession()
+        return active.drivePcsRequired && !cookieJar.contains(PCS_DOCUMENTS_COOKIE)
+    }
+
+    fun pollPcsApproval(): ICloudPcsPollResult {
+        val active = requireSession()
+        if (!needsPcsApproval()) return ICloudPcsPollResult.APPROVED
+        val response = commonJsonRequest(
+            url = "$SETUP_ENDPOINT/requestPCS",
+            method = "POST",
+            json = JSONObject()
+                .put("appName", "iclouddrive")
+                .put("derivedFromUserAction", true),
+        )
+        val json = parseObject(response.body)
+        sessionStore.save(active, cookieJar.snapshot())
+        return ICloudPcsProtocol.evaluate(
+            status = json.optString("status"),
+            hasDocumentsCookie = cookieJar.contains(PCS_DOCUMENTS_COOKIE),
+        )
     }
 
     fun listFolder(folderId: String): List<ICloudDriveItem> {
@@ -233,7 +252,7 @@ internal class ICloudApiClient @Inject constructor(
         execute(request.build(), setOf(200))
     }
 
-    private fun accountLogin() {
+    private fun accountLogin(): ICloudLoginResult {
         val active = requireSession()
         if (active.sessionToken.isBlank()) {
             throw ICloudApiException(ICloudError.INVALID_RESPONSE, "Apple 未返回登录会话令牌")
@@ -270,8 +289,12 @@ internal class ICloudApiClient @Inject constructor(
         active.drivePcsRequired = drive.optBoolean("pcsRequired")
         checkServiceEndpoint(active.driveEndpoint)
         checkServiceEndpoint(active.docsEndpoint)
-        ensureDriveSupported(active)
         sessionStore.save(active, cookieJar.snapshot())
+        return if (needsPcsApproval()) {
+            ICloudLoginResult.NeedsPcsApproval
+        } else {
+            ICloudLoginResult.Authenticated
+        }
     }
 
     private fun trustedPhones(): List<TrustedPhone> {
@@ -407,10 +430,10 @@ internal class ICloudApiClient @Inject constructor(
         ?: throw ICloudApiException(ICloudError.SESSION_EXPIRED, "请先登录 iCloud")
 
     private fun ensureDriveSupported(active: ICloudSession) {
-        if (active.drivePcsRequired) {
+        if (active.drivePcsRequired && !cookieJar.contains(PCS_DOCUMENTS_COOKIE)) {
             throw ICloudApiException(
                 ICloudError.ADVANCED_DATA_PROTECTION,
-                "此账户启用了高级数据保护，当前版本尚不能取得 iCloud Drive 的设备授权",
+                "尚未取得 iCloud Drive 的设备授权，请在受信任 Apple 设备上批准",
             )
         }
     }
@@ -431,6 +454,7 @@ internal class ICloudApiClient @Inject constructor(
         const val SETUP_ENDPOINT = "https://setup.icloud.com.cn/setup/ws/1"
         const val DEFAULT_ZONE = "com.apple.CloudDocs"
         const val HEADER_SESSION_TOKEN = "X-Apple-Session-Token"
+        const val PCS_DOCUMENTS_COOKIE = "X-APPLE-WEBAUTH-PCS-Documents"
         const val WIDGET_KEY = "d39ba9916b7251055b22c7f910e2ea796ee65e98b2ddecea8f5dde8d9d1a815d"
         const val USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
             "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3.1 Safari/605.1.15"
@@ -439,6 +463,19 @@ internal class ICloudApiClient @Inject constructor(
 }
 
 internal data class ICloudDownloadTicket(val url: String, val cookieHeader: String)
+
+internal object ICloudPcsProtocol {
+    fun evaluate(status: String, hasDocumentsCookie: Boolean): ICloudPcsPollResult {
+        if (!status.equals("success", ignoreCase = true)) return ICloudPcsPollResult.WAITING
+        if (!hasDocumentsCookie) {
+            throw ICloudApiException(
+                ICloudError.INVALID_RESPONSE,
+                "设备已批准，但 iCloud 没有返回云盘解密授权，请重新登录后重试",
+            )
+        }
+        return ICloudPcsPollResult.APPROVED
+    }
+}
 
 internal object ICloudDriveJson {
     fun parseFolder(body: String): List<ICloudDriveItem> {

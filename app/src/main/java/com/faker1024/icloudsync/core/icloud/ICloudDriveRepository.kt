@@ -19,8 +19,12 @@ class ICloudDriveRepository @Inject internal constructor(
     suspend fun login(accountName: String, password: String): ICloudLoginResult =
         withContext(Dispatchers.IO) { api.beginLogin(accountName, password) }
 
-    suspend fun verifyCode(code: String, phoneId: Int?) =
+    suspend fun verifyCode(code: String, phoneId: Int?): ICloudLoginResult =
         withContext(Dispatchers.IO) { api.verifyTwoFactor(code, phoneId) }
+
+    suspend fun needsPcsApproval(): Boolean = withContext(Dispatchers.IO) { api.needsPcsApproval() }
+
+    suspend fun pollPcsApproval(): ICloudPcsPollResult = withContext(Dispatchers.IO) { api.pollPcsApproval() }
 
     suspend fun resendTrustedDeviceCode() = withContext(Dispatchers.IO) { api.requestTrustedDeviceCode() }
 

@@ -2,7 +2,7 @@
 
 > 文档状态：原生 UI / 私有 Web 接口 MVP<br>
 > 最后更新：2026-08-21<br>
-> 当前版本：0.3.0
+> 当前版本：0.4.0
 
 ## 1. 产品定义
 
@@ -26,7 +26,7 @@
 - 不支持多账户同时在线。
 - 不经过开发者服务器中转账户或文件数据。
 - 不尝试绕过 Apple 的双重认证、条款确认、账户锁定或设备授权。
-- 当前版本不处理高级数据保护（ADP）的 PCS 授权流程。
+- 不绕过高级数据保护（ADP）；PCS 解密授权必须由用户的受信任设备批准。
 
 ## 2. 用户流程
 
@@ -134,6 +134,18 @@ core/web/
 
 保存字段包括会话令牌、信任令牌、会话 ID、认证属性、服务地址和 Cookie。整个 JSON 使用 Android Keystore 中不可导出的 AES 密钥以 GCM 模式加密。Apple 账户与会话一起加密；密码和验证码永不进入会话对象。
 
+### 4.5 高级数据保护与 PCS
+
+当 `drivews.pcsRequired=true` 且会话中没有 `X-APPLE-WEBAUTH-PCS-Documents` 时，不得直接请求 Drive，也不得要求用户关闭高级数据保护。App 进入独立的设备批准状态：
+
+1. 提示用户在 Apple 账户的 iCloud.com 设置中开启“允许访问 iCloud 数据”。
+2. `POST /requestPCS`，请求体为 `appName=iclouddrive`、`derivedFromUserAction=true`。
+3. 每 10 秒重新请求一次，最多 30 次；等待期间提示用户在受信任 iPhone、iPad 或 Mac 上批准。
+4. 只有响应状态为 `success` 且 CookieJar 确实包含 `X-APPLE-WEBAUTH-PCS-Documents` 时才算授权成功。
+5. 成功后立即使用 Keystore 加密持久化更新后的 Cookie，再读取云盘根目录。
+
+等待任务必须可取消。进程中止前保存的登录会话允许 App 重启后继续 PCS 授权，但取消登录必须清除令牌和所有 Cookie。
+
 ## 5. Drive 浏览和下载
 
 ### 5.1 根目录与列表
@@ -183,6 +195,7 @@ Download/iCloud Drive/
 | `LOGGED_OUT` | 账户、密码、风险确认和登录按钮 |
 | `AUTHENTICATING` | 禁用输入并显示进度 |
 | `TWO_FACTOR` | 6 位验证码、设备推送、短信和取消 |
+| `PCS_APPROVAL` | ADP 说明、受信任设备批准、轮询进度、立即检查和取消 |
 | `BROWSING` | 面包屑、文件列表、刷新、下载和退出 |
 
 网络调用全部在 `Dispatchers.IO`；UI 不持有 Cookie、令牌或 HTTP 响应。密码从 Composable 传给 ViewModel 后立即清空输入状态。下载中的文件 ID 单独记录，避免重复点击创建多个系统任务。
@@ -195,7 +208,7 @@ Download/iCloud Drive/
 | 账户或密码错误 | 清空会话，返回登录页 |
 | 验证码错误或过期 | 留在 2FA 页面，可重发 |
 | 401 / 421 | 会话过期，清除并重新登录 |
-| 423 / `pcsRequired` | 提示高级数据保护暂不支持 |
+| 423 / `pcsRequired` | 进入 PCS 设备批准流程；缺少 Documents Cookie 时禁止访问 Drive |
 | 429 | 提示稍后重试，不自动高频重放 |
 | 5xx | 提示 iCloud 服务暂不可用 |
 | JSON/服务地址异常 | 拒绝使用返回值，显示兼容性错误 |
@@ -248,7 +261,7 @@ Download/iCloud Drive/
 - 根目录、深层目录、空目录、中文/Emoji/超长文件名。
 - PDF、Office、ZIP、图片、视频和 iWork package 下载。
 - Wi-Fi/蜂窝网络切换、断网、空间不足和重复点击。
-- 中国区条款未确认、iCloud Drive 未开启和 ADP 账户提示。
+- 中国区条款未确认、iCloud Drive 未开启、ADP 批准成功/拒绝/超时和关闭网页访问。
 
 测试账户不得包含真实个人照片、联系人、位置或生产文件；凭据不得写入仓库、Gradle 属性、CI Secret 输出或截图。
 
@@ -256,6 +269,7 @@ Download/iCloud Drive/
 
 - App 中不存在 WebView，所有登录与文件 UI 都是原生 Compose。
 - 中国大陆测试账户可完成 SRP 登录、2FA 和根目录读取。
+- ADP 测试账户可在不关闭高级数据保护的情况下，通过受信任设备批准后读取根目录。
 - 可逐层浏览文件夹，并下载至少文档、压缩包、照片和视频。
 - 原始文件出现在 `Download/iCloud Drive/` 且内容哈希与云端一致。
 - 密码/验证码不落盘；重启后仅通过 Keystore 加密会话恢复。

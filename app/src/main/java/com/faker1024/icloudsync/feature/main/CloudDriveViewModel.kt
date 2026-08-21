@@ -8,9 +8,13 @@ import com.faker1024.icloudsync.core.icloud.ICloudApiException
 import com.faker1024.icloudsync.core.icloud.ICloudError
 import com.faker1024.icloudsync.core.icloud.ICloudFolder
 import com.faker1024.icloudsync.core.icloud.ICloudLoginResult
+import com.faker1024.icloudsync.core.icloud.ICloudPcsPollResult
 import com.faker1024.icloudsync.core.icloud.TrustedPhone
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -26,13 +30,17 @@ class CloudDriveViewModel @Inject constructor(
     val state = _state.asStateFlow()
     private val _events = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val events = _events.asSharedFlow()
+    private var pcsApprovalJob: Job? = null
 
     init {
         viewModelScope.launch {
             val restored = runCatching { repository.restoreSession() }.getOrDefault(false)
             if (restored) {
-                _state.update { it.copy(phase = CloudDrivePhase.BROWSING) }
-                loadFolder(ICloudFolder(ICloudDriveRepository.ROOT_ID, "iCloud Drive"), replacePath = true)
+                if (runCatching { repository.needsPcsApproval() }.getOrDefault(false)) {
+                    startPcsApproval()
+                } else {
+                    openRootFolder()
+                }
             } else {
                 _state.update { it.copy(phase = CloudDrivePhase.LOGGED_OUT) }
             }
@@ -49,21 +57,7 @@ class CloudDriveViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching { repository.login(accountName, password) }
                 .onSuccess { result ->
-                    when (result) {
-                        ICloudLoginResult.Authenticated -> {
-                            _state.update { it.copy(phase = CloudDrivePhase.BROWSING, isBusy = false) }
-                            loadFolder(ICloudFolder(ICloudDriveRepository.ROOT_ID, "iCloud Drive"), replacePath = true)
-                        }
-                        is ICloudLoginResult.NeedsTwoFactor -> _state.update {
-                            it.copy(
-                                phase = CloudDrivePhase.TWO_FACTOR,
-                                phones = result.phones,
-                                selectedPhoneId = null,
-                                isBusy = false,
-                                error = null,
-                            )
-                        }
-                    }
+                    handleLoginResult(result)
                 }
                 .onFailure { error ->
                     repository.logout()
@@ -80,10 +74,7 @@ class CloudDriveViewModel @Inject constructor(
         val phoneId = _state.value.selectedPhoneId
         viewModelScope.launch {
             runCatching { repository.verifyCode(code, phoneId) }
-                .onSuccess {
-                    _state.update { it.copy(phase = CloudDrivePhase.BROWSING, isBusy = false) }
-                    loadFolder(ICloudFolder(ICloudDriveRepository.ROOT_ID, "iCloud Drive"), replacePath = true)
-                }
+                .onSuccess(::handleLoginResult)
                 .onFailure { error ->
                     _state.update { it.copy(isBusy = false, error = error.userMessage()) }
                 }
@@ -143,13 +134,96 @@ class CloudDriveViewModel @Inject constructor(
         }
     }
 
+    fun retryPcsApproval() = startPcsApproval()
+
     fun logout() {
+        pcsApprovalJob?.cancel()
+        pcsApprovalJob = null
         repository.logout()
         _state.value = CloudDriveUiState(phase = CloudDrivePhase.LOGGED_OUT)
         _events.tryEmit("已清除本机 iCloud 登录会话")
     }
 
     fun clearError() = _state.update { it.copy(error = null) }
+
+    private fun handleLoginResult(result: ICloudLoginResult) {
+        when (result) {
+            ICloudLoginResult.Authenticated -> openRootFolder()
+            ICloudLoginResult.NeedsPcsApproval -> startPcsApproval()
+            is ICloudLoginResult.NeedsTwoFactor -> _state.update {
+                it.copy(
+                    phase = CloudDrivePhase.TWO_FACTOR,
+                    phones = result.phones,
+                    selectedPhoneId = null,
+                    isBusy = false,
+                    error = null,
+                )
+            }
+        }
+    }
+
+    private fun openRootFolder() {
+        _state.update { it.copy(phase = CloudDrivePhase.BROWSING, isBusy = false, error = null) }
+        loadFolder(ICloudFolder(ICloudDriveRepository.ROOT_ID, "iCloud Drive"), replacePath = true)
+    }
+
+    private fun startPcsApproval() {
+        pcsApprovalJob?.cancel()
+        _state.update {
+            it.copy(
+                phase = CloudDrivePhase.PCS_APPROVAL,
+                isBusy = true,
+                error = null,
+                pcsAttempt = 0,
+                pcsMessage = "正在向受信任设备请求 iCloud Drive 访问授权…",
+            )
+        }
+        pcsApprovalJob = viewModelScope.launch {
+            for (attempt in 1..PCS_MAX_ATTEMPTS) {
+                _state.update {
+                    it.copy(
+                        phase = CloudDrivePhase.PCS_APPROVAL,
+                        isBusy = true,
+                        pcsAttempt = attempt,
+                        pcsMessage = if (attempt == 1) {
+                            "正在发送授权请求…"
+                        } else {
+                            "正在检查设备批准结果…"
+                        },
+                    )
+                }
+                val result = try {
+                    repository.pollPcsApproval()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    _state.update {
+                        it.copy(isBusy = false, error = error.userMessage(), pcsMessage = "授权请求暂未完成")
+                    }
+                    return@launch
+                }
+                if (result == ICloudPcsPollResult.APPROVED) {
+                    _events.emit("受信任设备已批准 iCloud Drive 访问")
+                    openRootFolder()
+                    return@launch
+                }
+                _state.update {
+                    it.copy(
+                        pcsMessage = "请在受信任的 iPhone、iPad 或 Mac 上批准临时访问",
+                        isBusy = true,
+                    )
+                }
+                if (attempt < PCS_MAX_ATTEMPTS) delay(PCS_POLL_INTERVAL_MS)
+            }
+            _state.update {
+                it.copy(
+                    isBusy = false,
+                    error = "等待设备批准已超时。确认已允许 iCloud.com 数据访问后重试。",
+                    pcsMessage = "尚未收到设备批准",
+                )
+            }
+        }
+    }
 
     private fun loadFolder(
         folder: ICloudFolder,
@@ -199,8 +273,13 @@ data class CloudDriveUiState(
     val downloadingIds: Set<String> = emptySet(),
     val isBusy: Boolean = false,
     val error: String? = null,
+    val pcsAttempt: Int = 0,
+    val pcsMessage: String = "",
 )
 
-enum class CloudDrivePhase { RESTORING, LOGGED_OUT, AUTHENTICATING, TWO_FACTOR, BROWSING }
+enum class CloudDrivePhase { RESTORING, LOGGED_OUT, AUTHENTICATING, TWO_FACTOR, PCS_APPROVAL, BROWSING }
 
 private fun Throwable.userMessage(): String = message?.takeIf(String::isNotBlank) ?: "操作失败，请稍后重试"
+
+private const val PCS_MAX_ATTEMPTS = 30
+private const val PCS_POLL_INTERVAL_MS = 10_000L

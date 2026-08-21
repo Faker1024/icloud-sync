@@ -39,5 +39,10 @@ internal class ICloudCookieJar : CookieJar {
     fun clear() = cookies.clear()
 
     @Synchronized
+    fun contains(name: String): Boolean = cookies.any {
+        it.name == name && it.value.isNotEmpty() && it.expiresAt > System.currentTimeMillis()
+    }
+
+    @Synchronized
     fun headerFor(url: HttpUrl): String = loadForRequest(url).joinToString("; ") { "${it.name}=${it.value}" }
 }

@@ -72,6 +72,12 @@ fun CloudDrivePage(
                 onCancel = viewModel::logout,
                 onClearError = viewModel::clearError,
             )
+            CloudDrivePhase.PCS_APPROVAL -> PcsApprovalPage(
+                state = state,
+                onRetry = viewModel::retryPcsApproval,
+                onCancel = viewModel::logout,
+                onClearError = viewModel::clearError,
+            )
             CloudDrivePhase.BROWSING -> BrowserPage(
                 state = state,
                 onBack = viewModel::navigateBack,
@@ -81,6 +87,53 @@ fun CloudDrivePage(
                 onLogout = viewModel::logout,
                 onClearError = viewModel::clearError,
             )
+        }
+    }
+}
+
+@Composable
+private fun PcsApprovalPage(
+    state: CloudDriveUiState,
+    onRetry: () -> Unit,
+    onCancel: () -> Unit,
+    onClearError: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text("批准 iCloud Drive 访问", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "你的账户启用了高级数据保护。解密密钥只在受信任设备上，Apple 需要你批准这次临时访问。",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(20.dp))
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("1. 在 iPhone 或 iPad 打开“设置 → Apple 账户 → iCloud → iCloud.com”。")
+                Text("2. 确认“允许访问 iCloud 数据”已经开启。高级数据保护可以保持开启。")
+                Text("3. 在受信任设备出现提示后，批准本次 iCloud 数据访问。")
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        if (state.isBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        Spacer(Modifier.height(10.dp))
+        Text(state.pcsMessage, fontWeight = FontWeight.Medium)
+        if (state.pcsAttempt > 0) {
+            Text(
+                "已检查 ${state.pcsAttempt}/30 次 · App 每 10 秒自动检查",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        state.error?.let { ErrorCard(it, onClearError) }
+        Spacer(Modifier.height(16.dp))
+        OutlinedButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
+            Text("我已批准，立即检查")
+        }
+        TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+            Text("取消并退出登录")
         }
     }
 }
