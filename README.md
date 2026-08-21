@@ -16,6 +16,7 @@
 - 图片文件显示真实缩略图，点击可在 App 内全屏预览。
 - 文件管理器支持列表/网格切换，缩略图与文件图标可在 48–144 dp 之间调整。
 - 支持按名称、修改时间、文件大小或文件类型升序/降序排列，文件夹始终优先；布局、尺寸和排序设置都会持久保存。
+- 全局采用接近 iOS Files 的视觉语言：系统蓝主色、分组灰背景、白色圆角浮层、矢量文件图标、胶囊状态和半透明风格导航；完整支持深色模式与系统字体缩放。
 - 单文件下载继续交给 Android `DownloadManager`；长按文件夹可递归同步全部文件并保留目录层级。
 - 文件夹同步由 WorkManager 在后台执行，逐文件原子写入、字节数校验、即时重试和指数退避任务重试。
 - 下载地址强制 HTTPS 并执行 Apple/iCloud 主机白名单校验。
@@ -40,7 +41,7 @@
 
 ## 技术栈
 
-- Kotlin、Jetpack Compose、Material 3
+- Kotlin、Jetpack Compose、Material 3（iOS 风格自定义主题与 Rounded Icons）
 - MVVM、Coroutines、StateFlow
 - OkHttp、`org.json`
 - Android Keystore、SRP-6a（RFC 5054 2048-bit group / SHA-256）

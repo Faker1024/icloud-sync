@@ -10,28 +10,30 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,8 +44,20 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
+import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.Settings
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.faker1024.icloudsync.BuildConfig
 import com.faker1024.icloudsync.core.icloud.ICloudDriveItem
@@ -57,11 +71,11 @@ import java.util.Date
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
-private enum class MainSection(val label: String, val symbol: String) {
-    CLOUD_DRIVE("云盘", "☁"),
-    IMPORT("导入", "⇩"),
-    HISTORY("历史", "↻"),
-    SETTINGS("设置", "⚙"),
+private enum class MainSection(val label: String) {
+    CLOUD_DRIVE("云盘"),
+    IMPORT("导入"),
+    HISTORY("历史"),
+    SETTINGS("设置"),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -89,19 +103,53 @@ fun MainScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            TopAppBar(title = { Text(sectionTitle(section)) })
+            CenterAlignedTopAppBar(
+                title = {
+                    Text(
+                        sectionTitle(section),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                    scrolledContainerColor = MaterialTheme.colorScheme.surface,
+                ),
+            )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
-            NavigationBar {
-                MainSection.entries.forEach { item ->
-                    NavigationBarItem(
-                        selected = section == item,
-                        onClick = { section = item },
-                        icon = { Text(item.symbol, style = MaterialTheme.typography.titleMedium) },
-                        label = { Text(item.label) },
-                    )
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f),
+                shadowElevation = 10.dp,
+            ) {
+                Column {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    NavigationBar(containerColor = Color.Transparent, tonalElevation = 0.dp) {
+                        MainSection.entries.forEach { item ->
+                            NavigationBarItem(
+                                selected = section == item,
+                                onClick = { section = item },
+                                icon = {
+                                    Icon(
+                                        mainSectionIcon(item),
+                                        contentDescription = item.label,
+                                        modifier = Modifier.size(23.dp),
+                                    )
+                                },
+                                label = { Text(item.label, style = MaterialTheme.typography.labelSmall) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    indicatorColor = Color.Transparent,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -156,21 +204,36 @@ private fun ImportPage(
 ) {
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         item {
-            Text(
-                "云盘下载的所有文件会保留在 Download/iCloud Drive/。如需让照片或视频出现在系统相册，可在这里继续导入。",
-                style = MaterialTheme.typography.bodyLarge,
-            )
+            IosGroupedSurface {
+                Row(
+                    modifier = Modifier.padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    IosIconTile(Icons.Rounded.PhotoLibrary, contentDescription = null)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("导入系统相册", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "将已下载的照片、视频或 ZIP 安全导入 DCIM，原始云盘文件保持不变。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
         item {
-            Button(
+            IosPrimaryButton(
                 onClick = onSelectFile,
                 modifier = Modifier.fillMaxWidth().height(52.dp),
             ) {
-                Text("选择照片、视频或 ZIP 导入相册")
+                Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.size(8.dp))
+                Text("选择文件并导入")
             }
         }
         if (batches.isEmpty()) {
@@ -179,7 +242,7 @@ private fun ImportPage(
             }
         } else {
             item {
-                Text("最近任务", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                IosSectionHeader("最近任务")
             }
             items(batches.take(5), key = { it.id }) { batch ->
                 ImportBatchCard(batch = batch, onCancel = { onCancel(batch.id) })
@@ -190,26 +253,30 @@ private fun ImportPage(
 
 @Composable
 private fun ImportBatchCard(batch: ImportBatchEntity, onCancel: () -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
+    IosGroupedSurface {
         Column(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    batch.sourceDisplayName ?: "下载文件",
+                Row(
                     modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(statusText(batch.state), color = statusColor(batch.state))
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    IosIconTile(Icons.AutoMirrored.Rounded.InsertDriveFile, contentDescription = null)
+                    Text(
+                        batch.sourceDisplayName ?: "下载文件",
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                }
+                IosStatusPill(statusText(batch.state), statusColor(batch.state))
             }
             val progress = batchProgress(batch)
             if (!batch.state.isFinished()) {
@@ -308,29 +375,44 @@ private fun HistoryPage(
         )
     }
     if (batches.isEmpty()) {
-        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("还没有导入记录")
+        Box(modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
+            IosHero(
+                title = "暂无导入记录",
+                message = "完成照片或视频导入后，任务状态会显示在这里。",
+                icon = Icons.Rounded.History,
+            )
         }
         return
     }
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         items(batches, key = { it.id }) { batch ->
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(batch.sourceDisplayName ?: "下载文件", fontWeight = FontWeight.SemiBold)
+            IosGroupedSurface {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        IosIconTile(Icons.Rounded.History, contentDescription = null)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(batch.sourceDisplayName ?: "下载文件", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
+                                    .format(Date(batch.createdAt)),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        IosStatusPill(statusText(batch.state), statusColor(batch.state))
+                    }
                     Text(
-                        DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
-                            .format(Date(batch.createdAt)),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        "${statusText(batch.state)} · 新增 ${batch.importedCount} · 重复 ${batch.duplicateCount} · " +
+                        "新增 ${batch.importedCount} · 重复 ${batch.duplicateCount} · " +
                             "失败 ${batch.failedCount + batch.unsupportedCount}",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     batch.errorCode?.let {
                         Text("错误：${errorText(it)}", color = MaterialTheme.colorScheme.error)
@@ -345,7 +427,10 @@ private fun HistoryPage(
                         }
                         TextButton(onClick = { onShowDetails(batch.id) }) { Text("查看详情") }
                         if (batch.state.isFinished()) {
-                            TextButton(onClick = { pendingDelete = batch }) { Text("清除记录") }
+                            TextButton(onClick = { pendingDelete = batch }) {
+                                Icon(Icons.Rounded.DeleteOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Text("清除")
+                            }
                         }
                     }
                 }
@@ -380,48 +465,126 @@ private fun SettingsPage(
         )
     }
     Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("云盘下载位置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text("所有文件按原格式保存到系统公共目录 Download/iCloud Drive/，可在系统“文件”或“下载”中查看。")
-        Text("照片和视频不会自动写入 DCIM；需要进入系统相册时，再使用“导入”功能。")
-        HorizontalDivider()
-        Text("照片导入位置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        OutlinedTextField(
-            value = value,
-            onValueChange = { value = it.take(64) },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("相册名称") },
-            supportingText = { Text("媒体将保存到 DCIM/${value.ifBlank { "iCloud Photos" }}/") },
-            singleLine = true,
-        )
-        Button(onClick = { onSaveAlbumName(value) }, modifier = Modifier.align(Alignment.End)) {
-            Text("保存")
+        IosSectionHeader("文件存储")
+        IosGroupedSurface {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                IosIconTile(Icons.Rounded.Folder, contentDescription = null)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text("iCloud Drive 下载", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "原始文件保存在 Download/iCloud Drive/，文件夹同步会保留云端层级。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "照片和视频只有在你主动导入时才会写入系统相册。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
-        HorizontalDivider()
-        Text("隐私与安全", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text("App 使用自己编写的登录和云盘界面，后台固定连接 iCloud 中国区服务，不打开或嵌入网页。")
-        Text("密码只在内存中用于 SRP 登录证明，不落盘、不明文发送；验证码不保存。会话令牌和 Cookie 使用 Android Keystore 加密后保存在本机。")
-        Text("Apple 未提供访问整个 iCloud Drive 的公开 Android API，因此这里使用网页私有接口；Apple 调整接口后可能需要升级 App。")
+
+        Spacer(Modifier.height(8.dp))
+        IosSectionHeader("照片导入")
+        IosGroupedSurface {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IosIconTile(Icons.Rounded.PhotoLibrary, contentDescription = null)
+                    Column(Modifier.weight(1f)) {
+                        Text("目标相册", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "DCIM/${value.ifBlank { "iCloud Photos" }}/",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it.take(64) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("相册名称") },
+                    singleLine = true,
+                    shape = MaterialTheme.shapes.medium,
+                )
+                IosPrimaryButton(
+                    onClick = { onSaveAlbumName(value) },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                ) { Text("保存相册设置") }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        IosSectionHeader("隐私与安全")
+        IosGroupedSurface {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    IosIconTile(Icons.Rounded.Lock, contentDescription = null)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Text("仅在本机处理", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "密码只用于设备端 SRP 登录证明，不落盘、不明文发送；会话令牌由 Android Keystore 加密。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "App 使用原生界面直连 iCloud 中国区私有网页接口，不嵌入网页，也不经过开发者服务器。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
         OutlinedButton(
             onClick = { showClearSessionDialog = true },
             modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.medium,
         ) {
-            Text("清除 iCloud 登录数据")
+            Icon(Icons.Rounded.DeleteOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+            Spacer(Modifier.size(8.dp))
+            Text("清除 iCloud 登录数据", color = MaterialTheme.colorScheme.error)
         }
-        Text("本产品为独立第三方工具，与 Apple Inc. 无关联或授权关系。")
-        Spacer(Modifier.height(8.dp))
-        Text("版本 ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall)
+        Text(
+            "独立第三方工具，与 Apple Inc. 无关联或授权关系。\n版本 ${BuildConfig.VERSION_NAME}",
+            modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp, bottom = 16.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
 @Composable
 private fun EmptyHistoryCard() {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("还没有导入任务", fontWeight = FontWeight.SemiBold)
-            Text("先在“云盘”中登录 iCloud 中国区并下载文件，然后返回这里选择照片、视频或 ZIP。")
+    IosGroupedSurface {
+        Row(
+            modifier = Modifier.padding(18.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IosIconTile(Icons.Rounded.History, contentDescription = null)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("还没有导入任务", fontWeight = FontWeight.SemiBold)
+                Text(
+                    "先从云盘下载文件，再返回这里选择照片、视频或 ZIP。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -431,6 +594,13 @@ private fun sectionTitle(section: MainSection): String = when (section) {
     MainSection.IMPORT -> "照片导入（可选）"
     MainSection.HISTORY -> "导入历史"
     MainSection.SETTINGS -> "设置"
+}
+
+private fun mainSectionIcon(section: MainSection): ImageVector = when (section) {
+    MainSection.CLOUD_DRIVE -> Icons.Rounded.Cloud
+    MainSection.IMPORT -> Icons.Rounded.Download
+    MainSection.HISTORY -> Icons.Rounded.History
+    MainSection.SETTINGS -> Icons.Rounded.Settings
 }
 
 private fun statusText(state: ImportBatchState): String = when (state) {

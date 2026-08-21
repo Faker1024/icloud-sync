@@ -25,10 +25,10 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -42,6 +42,9 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -56,15 +59,42 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
+import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.automirrored.rounded.Sort
+import androidx.compose.material.icons.automirrored.rounded.ViewList
+import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material.icons.rounded.CloudDownload
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Devices
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.PictureAsPdf
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.TableChart
+import androidx.compose.material.icons.rounded.Tune
 import com.faker1024.icloudsync.core.icloud.ICloudDriveItem
 import com.faker1024.icloudsync.core.icloud.TrustedPhone
 import com.faker1024.icloudsync.core.icloud.isPreviewableImage
@@ -138,37 +168,44 @@ private fun PcsApprovalPage(
     onClearError: () -> Unit,
 ) {
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        verticalArrangement = Arrangement.Center,
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("批准 iCloud Drive 访问", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "你的账户启用了高级数据保护。解密密钥只在受信任设备上，Apple 需要你批准这次临时访问。",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        IosHero(
+            title = "批准云盘访问",
+            message = "此账户启用了高级数据保护，需要在受信任设备上批准临时访问。",
+            icon = Icons.Rounded.Security,
         )
-        Spacer(Modifier.height(20.dp))
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("1. 在 iPhone 或 iPad 打开“设置 → Apple 账户 → iCloud → iCloud.com”。")
-                Text("2. 确认“允许访问 iCloud 数据”已经开启。高级数据保护可以保持开启。")
-                Text("3. 在受信任设备出现提示后，批准本次 iCloud 数据访问。")
+        IosSectionHeader("在受信任设备上操作")
+        IosGroupedSurface {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                PcsStep(1, "打开“设置 → Apple 账户 → iCloud → iCloud.com”")
+                PcsStep(2, "确认“允许访问 iCloud 数据”已开启，高级数据保护可以保持开启")
+                PcsStep(3, "收到提示后，批准本次 iCloud 数据访问")
             }
         }
-        Spacer(Modifier.height(20.dp))
-        if (state.isBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
-        Spacer(Modifier.height(10.dp))
-        Text(state.pcsMessage, fontWeight = FontWeight.Medium)
-        if (state.pcsAttempt > 0) {
-            Text(
-                "已检查 ${state.pcsAttempt}/30 次 · App 每 10 秒自动检查",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        IosGroupedSurface {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    IosIconTile(Icons.Rounded.Devices, contentDescription = null)
+                    Column(Modifier.weight(1f)) {
+                        Text(state.pcsMessage, fontWeight = FontWeight.Medium)
+                        if (state.pcsAttempt > 0) {
+                            Text(
+                                "已检查 ${state.pcsAttempt}/30 次 · 每 10 秒自动检查",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                if (state.isBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
         }
         state.error?.let { ErrorCard(it, onClearError) }
-        Spacer(Modifier.height(16.dp))
-        OutlinedButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
+        IosPrimaryButton(onClick = onRetry, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+            Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.size(8.dp))
             Text("我已批准，立即检查")
         }
         TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.CenterHorizontally)) {
@@ -187,52 +224,58 @@ private fun LoginPage(
     var password by rememberSaveable { mutableStateOf("") }
     var accepted by rememberSaveable { mutableStateOf(false) }
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        verticalArrangement = Arrangement.Center,
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("登录 iCloud 中国区", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "使用中国大陆 Apple 账户登录。界面由本 App 提供，底层直连 iCloud 中国区服务。",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        IosHero(
+            title = "登录 iCloud",
+            message = "使用中国大陆 Apple 账户，直接连接 iCloud 中国区服务。",
+            icon = Icons.Rounded.Cloud,
         )
-        Spacer(Modifier.height(24.dp))
-        OutlinedTextField(
-            value = account,
-            onValueChange = { account = it.take(160); onClearError() },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Apple 账户") },
-            placeholder = { Text("name@example.com") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-            singleLine = true,
-            enabled = !state.isBusy,
-        )
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = password,
-            onValueChange = { password = it.take(256); onClearError() },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("密码") },
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            singleLine = true,
-            enabled = !state.isBusy,
-        )
-        Spacer(Modifier.height(12.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().clickable(enabled = !state.isBusy) { accepted = !accepted },
-            verticalAlignment = Alignment.Top,
-        ) {
-            Checkbox(checked = accepted, onCheckedChange = { accepted = it }, enabled = !state.isBusy)
-            Text(
-                "我了解：本工具使用 Apple 未公开的网页接口，接口变化可能导致登录或云盘功能暂时失效；账户数据只在本机处理。",
-                modifier = Modifier.padding(top = 11.dp),
-                style = MaterialTheme.typography.bodySmall,
-            )
+        IosSectionHeader("账户")
+        IosGroupedSurface {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = account,
+                    onValueChange = { account = it.take(160); onClearError() },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Apple 账户") },
+                    placeholder = { Text("name@example.com") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    singleLine = true,
+                    enabled = !state.isBusy,
+                    shape = MaterialTheme.shapes.medium,
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it.take(256); onClearError() },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("密码") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    singleLine = true,
+                    enabled = !state.isBusy,
+                    shape = MaterialTheme.shapes.medium,
+                )
+            }
+        }
+        IosGroupedSurface {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable(enabled = !state.isBusy) { accepted = !accepted }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Checkbox(checked = accepted, onCheckedChange = { accepted = it }, enabled = !state.isBusy)
+                Text(
+                    "我了解本工具使用 Apple 未公开的网页接口；接口变化可能影响可用性，账户数据仅在本机处理。",
+                    modifier = Modifier.padding(top = 10.dp, end = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         state.error?.let { ErrorCard(it, onClearError) }
-        Spacer(Modifier.height(12.dp))
-        Button(
+        IosPrimaryButton(
             onClick = {
                 onLogin(account, password)
                 password = ""
@@ -241,17 +284,27 @@ private fun LoginPage(
             enabled = accepted && account.isNotBlank() && password.isNotBlank() && !state.isBusy,
         ) {
             if (state.isBusy) {
-                CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                CircularProgressIndicator(
+                    Modifier.size(22.dp),
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    strokeWidth = 2.dp,
+                )
             } else {
                 Text("登录")
             }
         }
-        Spacer(Modifier.height(16.dp))
-        Text(
-            "密码通过 SRP 在本机生成登录证明，不会明文发送或保存；登录成功后仅加密保存会话令牌。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Icon(Icons.Rounded.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(17.dp))
+            Text(
+                "密码通过 SRP 在本机生成登录证明，不会明文发送或保存。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -266,46 +319,69 @@ private fun TwoFactorPage(
 ) {
     var code by rememberSaveable { mutableStateOf("") }
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        verticalArrangement = Arrangement.Center,
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("双重认证", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(8.dp))
-        Text("请输入 Apple 发送到受信任设备或手机号的 6 位验证码。")
-        Spacer(Modifier.height(20.dp))
-        OutlinedTextField(
-            value = code,
-            onValueChange = { value -> code = value.filter(Char::isDigit).take(6); onClearError() },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("验证码") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-            singleLine = true,
-            enabled = !state.isBusy,
+        IosHero(
+            title = "双重认证",
+            message = "输入发送到受信任设备或手机号的 6 位验证码。",
+            icon = Icons.Rounded.Key,
         )
+        IosGroupedSurface {
+            OutlinedTextField(
+                value = code,
+                onValueChange = { value -> code = value.filter(Char::isDigit).take(6); onClearError() },
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                label = { Text("6 位验证码") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                singleLine = true,
+                enabled = !state.isBusy,
+                shape = MaterialTheme.shapes.medium,
+            )
+        }
         state.error?.let { ErrorCard(it, onClearError) }
-        Spacer(Modifier.height(16.dp))
-        Button(
+        IosPrimaryButton(
             onClick = { onVerify(code); code = "" },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             enabled = code.length == 6 && !state.isBusy,
         ) {
-            if (state.isBusy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+            if (state.isBusy) {
+                CircularProgressIndicator(
+                    Modifier.size(22.dp),
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    strokeWidth = 2.dp,
+                )
+            }
             else Text("验证并进入云盘")
         }
-        Spacer(Modifier.height(12.dp))
-        OutlinedButton(
-            onClick = onTrustedDevice,
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !state.isBusy,
-        ) { Text("重新发送到受信任设备") }
-        state.phones.forEach { phone ->
-            TextButton(
-                onClick = { onSms(phone) },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !state.isBusy,
-            ) { Text("发送短信到 ${phone.label}") }
+        IosGroupedSurface {
+            Column(Modifier.padding(vertical = 4.dp)) {
+                TextButton(
+                    onClick = onTrustedDevice,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.isBusy,
+                ) {
+                    Icon(Icons.Rounded.Devices, contentDescription = null, modifier = Modifier.size(19.dp))
+                    Spacer(Modifier.size(8.dp))
+                    Text("重新发送到受信任设备")
+                }
+                state.phones.forEach { phone ->
+                    TextButton(
+                        onClick = { onSms(phone) },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !state.isBusy,
+                    ) {
+                        Icon(Icons.Rounded.Key, contentDescription = null, modifier = Modifier.size(19.dp))
+                        Spacer(Modifier.size(8.dp))
+                        Text("发送短信到 ${phone.label}")
+                    }
+                }
+            }
         }
-        TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("取消登录") }
+        TextButton(
+            onClick = onCancel,
+                modifier = Modifier.fillMaxWidth(),
+        ) { Text("取消登录") }
     }
 }
 
@@ -453,66 +529,118 @@ private fun BrowserPage(
 
     Column(Modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            TextButton(onClick = { onBack() }, enabled = state.path.size > 1 && !state.isBusy) { Text("‹ 返回") }
-            Text(
-                state.path.lastOrNull()?.name ?: "iCloud Drive",
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                fontWeight = FontWeight.SemiBold,
-            )
-            TextButton(onClick = onRefresh, enabled = !state.isBusy) { Text("刷新") }
-            TextButton(onClick = onLogout, enabled = !state.isBusy) { Text("退出") }
+            if (state.path.size > 1) {
+                IconButton(onClick = { onBack() }, enabled = !state.isBusy) {
+                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                }
+            } else {
+                IosIconTile(Icons.Rounded.Cloud, contentDescription = null)
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(
+                    state.path.lastOrNull()?.name ?: "iCloud Drive",
+                    maxLines = 1,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "${state.items.size} 项 · ${sortFieldShortLabel(state.sortField)}${sortDirectionArrow(state.sortDirection)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            FilledTonalIconButton(onClick = onRefresh, enabled = !state.isBusy) {
+                Icon(Icons.Rounded.Refresh, contentDescription = "刷新")
+            }
+            IconButton(onClick = onLogout, enabled = !state.isBusy) {
+                Icon(Icons.AutoMirrored.Rounded.Logout, contentDescription = "退出登录", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             state.path.forEachIndexed { index, folder ->
-                if (index > 0) Text("  ›  ", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(folder.name, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                if (index > 0) {
+                    Icon(
+                        Icons.Rounded.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(17.dp),
+                    )
+                }
+                Text(
+                    folder.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (index == state.path.lastIndex) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                    maxLines = 1,
+                )
             }
         }
-        Text(
-            "下载位置：Download/iCloud Drive/ · 文件夹同步会保留目录层级",
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                "${state.items.size} 项",
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            TextButton(onClick = {
-                pendingSortField = state.sortField
-                pendingSortDirection = state.sortDirection
-                showSortDialog = true
-            }) {
-                Text("排序 ${sortFieldShortLabel(state.sortField)}${sortDirectionArrow(state.sortDirection)}")
-            }
-            TextButton(
-                onClick = {
-                    onSetLayout(
-                        if (state.layout == CloudBrowserLayout.LIST) CloudBrowserLayout.GRID
-                        else CloudBrowserLayout.LIST,
-                    )
-                },
+        IosGroupedSurface(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(if (state.layout == CloudBrowserLayout.LIST) "▦ 网格" else "☷ 列表")
+                Row(
+                    modifier = Modifier.weight(1f).padding(start = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    Icon(
+                        Icons.Rounded.Download,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        "Download/iCloud Drive/",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+                CloudToolbarAction(
+                    icon = Icons.AutoMirrored.Rounded.Sort,
+                    label = "排序",
+                    onClick = {
+                        pendingSortField = state.sortField
+                        pendingSortDirection = state.sortDirection
+                        showSortDialog = true
+                    },
+                )
+                CloudToolbarAction(
+                    icon = if (state.layout == CloudBrowserLayout.LIST) {
+                        Icons.Rounded.GridView
+                    } else {
+                        Icons.AutoMirrored.Rounded.ViewList
+                    },
+                    label = if (state.layout == CloudBrowserLayout.LIST) "网格" else "列表",
+                    onClick = {
+                        onSetLayout(
+                            if (state.layout == CloudBrowserLayout.LIST) CloudBrowserLayout.GRID
+                            else CloudBrowserLayout.LIST,
+                        )
+                    },
+                )
+                CloudToolbarAction(
+                    icon = Icons.Rounded.Tune,
+                    label = "大小",
+                    onClick = {
+                        pendingIconSize = state.iconSize
+                        showIconSizeDialog = true
+                    },
+                )
             }
-            TextButton(onClick = {
-                pendingIconSize = state.iconSize
-                showIconSizeDialog = true
-            }) { Text("大小") }
         }
         state.folderSync?.let { sync ->
             FolderSyncStatusCard(sync = sync, onCancel = onCancelSync)
@@ -520,12 +648,18 @@ private fun BrowserPage(
         if (state.isBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
         state.error?.let { ErrorCard(it, onClearError, Modifier.padding(horizontal = 12.dp)) }
         if (state.items.isEmpty() && !state.isBusy) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("这个文件夹是空的") }
+            Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
+                IosHero(
+                    title = "这个文件夹是空的",
+                    message = "这里暂时没有文件或子文件夹。",
+                    icon = Icons.Rounded.Folder,
+                )
+            }
         } else {
             if (state.layout == CloudBrowserLayout.LIST) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     listItems(displayedItems, key = ICloudDriveItem::id) { item ->
@@ -546,7 +680,7 @@ private fun BrowserPage(
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive((state.iconSize + 72f).dp),
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -583,14 +717,13 @@ private fun DriveItemRow(
     loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
 ) {
     val canPreview = !item.isFolder && isPreviewableImage(item.name)
-    Card(
+    IosGroupedSurface(
         modifier = Modifier.fillMaxWidth().combinedClickable(
             enabled = item.isFolder || canPreview,
             onClick = { if (item.isFolder) onOpen() else onPreview() },
             onLongClick = { if (item.isFolder) onLongPressFolder() },
             onLongClickLabel = if (item.isFolder) "同步此文件夹到本地" else null,
         ),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
@@ -610,9 +743,15 @@ private fun DriveItemRow(
                 )
             }
             if (item.isFolder) {
-                Text("›", style = MaterialTheme.typography.headlineSmall)
+                Icon(
+                    Icons.Rounded.ChevronRight,
+                    contentDescription = "打开文件夹",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             } else {
                 TextButton(onClick = onDownload, enabled = !downloading) {
+                    Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.size(4.dp))
                     Text(if (downloading) "准备中" else "下载")
                 }
             }
@@ -634,14 +773,13 @@ private fun DriveItemGridCell(
     loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
 ) {
     val canPreview = !item.isFolder && isPreviewableImage(item.name)
-    Card(
+    IosGroupedSurface(
         modifier = Modifier.fillMaxWidth().combinedClickable(
             enabled = item.isFolder || canPreview,
             onClick = { if (item.isFolder) onOpen() else onPreview() },
             onLongClick = { if (item.isFolder) onLongPressFolder() },
             onLongClickLabel = if (item.isFolder) "同步此文件夹到本地" else null,
         ),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(10.dp),
@@ -662,6 +800,8 @@ private fun DriveItemGridCell(
             )
             if (!item.isFolder) {
                 TextButton(onClick = onDownload, enabled = !downloading) {
+                    Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.size(4.dp))
                     Text(if (downloading) "准备中" else "下载")
                 }
             } else {
@@ -681,12 +821,15 @@ private fun DriveItemVisual(
     iconSize: Float,
     loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
 ) {
-    val rounded = RoundedCornerShape((iconSize / 7f).dp)
+    val rounded = RoundedCornerShape((iconSize / 6f).dp)
     Box(
         modifier = Modifier
             .size(iconSize.dp)
             .clip(rounded)
-            .background(MaterialTheme.colorScheme.surfaceVariant),
+            .background(
+                if (item.isFolder) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         if (!item.isFolder && isPreviewableImage(item.name)) {
@@ -697,13 +840,20 @@ private fun DriveItemVisual(
                 modifier = Modifier.fillMaxSize(),
                 loadPreview = loadPreview,
                 fallback = {
-                    Text("🖼", fontSize = (iconSize * 0.48f).sp)
+                    Icon(
+                        Icons.Rounded.Image,
+                        contentDescription = null,
+                        tint = fileIconTint(item),
+                        modifier = Modifier.size((iconSize * 0.54f).dp),
+                    )
                 },
             )
         } else {
-            Text(
-                if (item.isFolder) "📁" else fileSymbol(item.name),
-                fontSize = (iconSize * 0.48f).sp,
+            Icon(
+                fileIcon(item),
+                contentDescription = null,
+                tint = fileIconTint(item),
+                modifier = Modifier.size((iconSize * 0.56f).dp),
             )
         }
     }
@@ -711,17 +861,36 @@ private fun DriveItemVisual(
 
 @Composable
 private fun FolderSyncStatusCard(sync: FolderSyncUiState, onCancel: () -> Unit) {
+    val failed = sync.stage == FolderSyncStage.FAILED
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(
+            containerColor = if (failed) MaterialTheme.colorScheme.errorContainer
+            else MaterialTheme.colorScheme.primaryContainer,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "${sync.folderName} · ${syncStageText(sync.stage)}",
-                    modifier = Modifier.weight(1f),
-                    fontWeight = FontWeight.SemiBold,
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                IosIconTile(
+                    icon = when {
+                        failed -> Icons.Rounded.ErrorOutline
+                        sync.stage == FolderSyncStage.COMPLETE -> Icons.Rounded.CheckCircle
+                        else -> Icons.Rounded.CloudDownload
+                    },
+                    contentDescription = null,
+                    tint = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                 )
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(sync.folderName, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Text(
+                        syncStageText(sync.stage),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (failed) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
                 if (sync.isActive) TextButton(onClick = onCancel) { Text("取消") }
             }
             if (sync.isActive) {
@@ -750,7 +919,7 @@ private fun FolderSyncStatusCard(sync: FolderSyncUiState, onCancel: () -> Unit) 
             Text(
                 sync.displayPath,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
             )
         }
@@ -780,7 +949,12 @@ private fun ImagePreviewDialog(
                         maxLines = 2,
                         fontWeight = FontWeight.Medium,
                     )
-                    TextButton(onClick = onDismiss) { Text("关闭", color = Color.White) }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.background(Color.White.copy(alpha = 0.14f), CircleShape),
+                    ) {
+                        Icon(Icons.Rounded.Close, contentDescription = "关闭预览", tint = Color.White)
+                    }
                 }
                 RemoteImage(
                     item = item,
@@ -890,14 +1064,54 @@ private fun sortDirectionArrow(direction: CloudSortDirection): String =
     if (direction == CloudSortDirection.ASCENDING) "↑" else "↓"
 
 @Composable
+private fun PcsStep(number: Int, text: String) {
+    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Box(
+            modifier = Modifier.size(28.dp).background(MaterialTheme.colorScheme.primary, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(number.toString(), color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.labelMedium)
+        }
+        Text(text, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun CloudToolbarAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.size(56.dp, 52.dp).clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+@Composable
 private fun ErrorCard(message: String, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     Card(
         modifier = modifier.fillMaxWidth().padding(top = 12.dp),
+        shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Rounded.ErrorOutline,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.size(10.dp))
             Text(message, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onErrorContainer)
-            TextButton(onClick = onDismiss) { Text("关闭") }
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = MaterialTheme.colorScheme.error)
+            }
         }
     }
 }
@@ -905,13 +1119,17 @@ private fun ErrorCard(message: String, onDismiss: () -> Unit, modifier: Modifier
 @Composable
 private fun LoadingPage(label: String) {
     Column(
-        Modifier.fillMaxSize(),
+        Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        CircularProgressIndicator()
-        Spacer(Modifier.height(16.dp))
-        Text(label)
+        IosHero(
+            title = "iCloud Drive",
+            message = label,
+            icon = Icons.Rounded.Cloud,
+        )
+        Spacer(Modifier.height(22.dp))
+        CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
     }
 }
 
@@ -934,12 +1152,27 @@ private fun formatFileSize(bytes: Long): String {
     return "%.1f %s".format(value, units[unit])
 }
 
-private fun fileSymbol(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-    "jpg", "jpeg", "png", "gif", "heic", "heif", "dng" -> "🖼"
-    "mp4", "mov", "m4v" -> "🎞"
-    "zip", "rar", "7z", "tar", "gz" -> "🗜"
-    "pdf" -> "📕"
-    "doc", "docx", "pages", "txt", "md" -> "📄"
-    "xls", "xlsx", "numbers", "csv" -> "📊"
-    else -> "📄"
+private fun fileIcon(item: ICloudDriveItem): ImageVector {
+    if (item.isFolder) return Icons.Rounded.Folder
+    return when (item.name.substringAfterLast('.', "").lowercase()) {
+        "jpg", "jpeg", "png", "gif", "heic", "heif", "dng", "webp", "avif" -> Icons.Rounded.Image
+        "mp4", "mov", "m4v" -> Icons.Rounded.Movie
+        "zip", "rar", "7z", "tar", "gz" -> Icons.Rounded.Archive
+        "pdf" -> Icons.Rounded.PictureAsPdf
+        "xls", "xlsx", "numbers", "csv" -> Icons.Rounded.TableChart
+        "doc", "docx", "pages", "txt", "md" -> Icons.Rounded.Description
+        else -> Icons.AutoMirrored.Rounded.InsertDriveFile
+    }
+}
+
+@Composable
+private fun fileIconTint(item: ICloudDriveItem): Color {
+    if (item.isFolder) return MaterialTheme.colorScheme.primary
+    return when (item.name.substringAfterLast('.', "").lowercase()) {
+        "pdf" -> MaterialTheme.colorScheme.error
+        "xls", "xlsx", "numbers", "csv" -> MaterialTheme.colorScheme.tertiary
+        "mp4", "mov", "m4v" -> MaterialTheme.colorScheme.secondary
+        "jpg", "jpeg", "png", "gif", "heic", "heif", "dng", "webp", "avif" -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
 }
