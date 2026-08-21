@@ -138,6 +138,15 @@ class MainViewModel @Inject constructor(
             }
     }
 
+    fun shareSyncedFile(file: SyncedFile) {
+        syncedFileRepository.share(file)
+            .onFailure {
+                viewModelScope.launch {
+                    eventChannel.send(MainEvent.Message("没有可接收此文件的应用，或文件已被移除"))
+                }
+            }
+    }
+
     fun setLocalBrowserLayout(layout: LocalBrowserLayout) {
         viewModelScope.launch { localBrowserSettings.setLayout(layout) }
     }

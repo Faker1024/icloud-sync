@@ -932,6 +932,7 @@ private fun ImagePreviewDialog(
     loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
     onDismiss: () -> Unit,
 ) {
+    val zoomState = rememberImageZoomState(item.id)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
@@ -949,6 +950,14 @@ private fun ImagePreviewDialog(
                         maxLines = 2,
                         fontWeight = FontWeight.Medium,
                     )
+                    Text(
+                        "${zoomState.percentage}%",
+                        color = Color.LightGray,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    TextButton(onClick = zoomState::reset, enabled = zoomState.canReset) {
+                        Text("还原", color = if (zoomState.canReset) Color.White else Color.Gray)
+                    }
                     IconButton(
                         onClick = onDismiss,
                         modifier = Modifier.background(Color.White.copy(alpha = 0.14f), CircleShape),
@@ -962,12 +971,13 @@ private fun ImagePreviewDialog(
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     loadPreview = loadPreview,
+                    zoomState = zoomState,
                     fallback = {
                         Text("图片加载失败，可返回后重试", color = Color.White)
                     },
                 )
                 Text(
-                    fileDetails(item),
+                    "${fileDetails(item)} · 双指缩放 / 双击切换",
                     modifier = Modifier.align(Alignment.CenterHorizontally).padding(16.dp),
                     color = Color.LightGray,
                     style = MaterialTheme.typography.bodySmall,
@@ -984,6 +994,7 @@ private fun RemoteImage(
     contentScale: ContentScale,
     modifier: Modifier,
     loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
+    zoomState: ImageZoomState? = null,
     fallback: @Composable () -> Unit,
 ) {
     val loadState by produceState<RemoteImageState>(
@@ -1004,12 +1015,21 @@ private fun RemoteImage(
         when (val current = loadState) {
             RemoteImageState.Loading -> CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
             RemoteImageState.Failed -> fallback()
-            is RemoteImageState.Ready -> Image(
-                bitmap = current.bitmap.asImageBitmap(),
-                contentDescription = item.name,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = contentScale,
-            )
+            is RemoteImageState.Ready -> if (zoomState != null) {
+                ZoomableBitmapImage(
+                    bitmap = current.bitmap,
+                    contentDescription = item.name,
+                    state = zoomState,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Image(
+                    bitmap = current.bitmap.asImageBitmap(),
+                    contentDescription = item.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = contentScale,
+                )
+            }
         }
     }
 }

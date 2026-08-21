@@ -98,9 +98,7 @@ class SyncedFileRepository @Inject constructor(
 
     fun openExternally(file: SyncedFile): Result<Unit> = runCatching {
         val uri = file.contentUri.toUri()
-        val type = file.mimeType?.takeIf(String::isNotBlank)
-            ?: context.contentResolver.getType(uri)
-            ?: "application/octet-stream"
+        val type = resolveMimeType(file)
         val viewIntent = Intent(Intent.ACTION_VIEW)
             .setDataAndType(uri, type)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -108,6 +106,25 @@ class SyncedFileRepository @Inject constructor(
         val chooser = Intent.createChooser(viewIntent, "打开 ${file.displayName}")
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         context.startActivity(chooser)
+    }
+
+    fun share(file: SyncedFile): Result<Unit> = runCatching {
+        val uri = file.contentUri.toUri()
+        val sendIntent = Intent(Intent.ACTION_SEND)
+            .setType(resolveMimeType(file))
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            .apply { clipData = ClipData.newUri(context.contentResolver, file.displayName, uri) }
+        val chooser = Intent.createChooser(sendIntent, "分享 ${file.displayName}")
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        context.startActivity(chooser)
+    }
+
+    private fun resolveMimeType(file: SyncedFile): String {
+        val uri = file.contentUri.toUri()
+        return file.mimeType?.takeIf(String::isNotBlank)
+            ?: context.contentResolver.getType(uri)
+            ?: "application/octet-stream"
     }
 
     companion object {

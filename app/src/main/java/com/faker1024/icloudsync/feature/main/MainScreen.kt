@@ -176,6 +176,7 @@ fun MainScreen(
                 preferences = localBrowserPreferences,
                 onRefresh = viewModel::refreshSyncedFiles,
                 onOpenFile = viewModel::openSyncedFile,
+                onShareFile = viewModel::shareSyncedFile,
                 onSetLayout = viewModel::setLocalBrowserLayout,
                 onSetSorting = viewModel::setLocalSorting,
                 loadImage = viewModel::loadSyncedImage,
@@ -496,7 +497,7 @@ private fun SettingsPage(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text("iCloud Drive 下载", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "原始文件保存在 Download/iCloud Drive/，文件夹同步会保留云端层级；可在“本地”标签页查看、搜索和排序。",
+                        "原始文件保存在 Download/iCloud Drive/，文件夹同步会保留云端层级；可在“本地”标签页查看、搜索、排序、打开或分享。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

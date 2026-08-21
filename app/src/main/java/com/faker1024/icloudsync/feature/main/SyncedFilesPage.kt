@@ -3,6 +3,8 @@ package com.faker1024.icloudsync.feature.main
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,17 +39,23 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.TableChart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
@@ -87,6 +95,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SyncedFilesPage(
     modifier: Modifier,
@@ -94,6 +103,7 @@ internal fun SyncedFilesPage(
     preferences: LocalBrowserPreferences,
     onRefresh: () -> Unit,
     onOpenFile: (SyncedFile) -> Unit,
+    onShareFile: (SyncedFile) -> Unit,
     onSetLayout: (LocalBrowserLayout) -> Unit,
     onSetSorting: (LocalSortField, LocalSortDirection) -> Unit,
     loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,
@@ -129,6 +139,7 @@ internal fun SyncedFilesPage(
     val entries = (entriesState as? SyncedEntriesState.Ready)?.entries.orEmpty()
     val isOrganizing = entriesState == SyncedEntriesState.Loading
     var previewFile by remember { mutableStateOf<SyncedFile?>(null) }
+    var actionFile by remember { mutableStateOf<SyncedFile?>(null) }
     if (showSortDialog) {
         LocalSortDialog(
             field = pendingSortField,
@@ -147,7 +158,22 @@ internal fun SyncedFilesPage(
             file = file,
             loadImage = loadImage,
             onOpenExternally = { onOpenFile(file) },
+            onShare = { onShareFile(file) },
             onDismiss = { previewFile = null },
+        )
+    }
+    actionFile?.let { file ->
+        SyncedFileActionsSheet(
+            file = file,
+            onOpenExternally = {
+                actionFile = null
+                onOpenFile(file)
+            },
+            onShare = {
+                actionFile = null
+                onShareFile(file)
+            },
+            onDismiss = { actionFile = null },
         )
     }
 
@@ -343,6 +369,7 @@ internal fun SyncedFilesPage(
                                 entry = entry,
                                 onOpenFolder = openFolder,
                                 onOpenFile = openFile,
+                                onShowActions = { actionFile = it },
                                 loadImage = loadImage,
                             )
                         }
@@ -358,6 +385,7 @@ internal fun SyncedFilesPage(
                                 entry = entry,
                                 onOpenFolder = openFolder,
                                 onOpenFile = openFile,
+                                onShowActions = { actionFile = it },
                                 loadImage = loadImage,
                             )
                         }
@@ -368,18 +396,26 @@ internal fun SyncedFilesPage(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SyncedEntryCard(
     entry: SyncedBrowserEntry,
     onOpenFolder: (SyncedBrowserEntry.Folder) -> Unit,
     onOpenFile: (SyncedFile) -> Unit,
+    onShowActions: (SyncedFile) -> Unit,
     loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,
 ) {
     val onClick = when (entry) {
         is SyncedBrowserEntry.Folder -> ({ onOpenFolder(entry) })
         is SyncedBrowserEntry.File -> ({ onOpenFile(entry.item) })
     }
-    IosGroupedSurface(modifier = Modifier.clickable(onClick = onClick)) {
+    IosGroupedSurface(
+        modifier = Modifier.combinedClickable(
+            onClick = onClick,
+            onLongClick = { (entry as? SyncedBrowserEntry.File)?.item?.let(onShowActions) },
+            onLongClickLabel = if (entry is SyncedBrowserEntry.File) "更多文件操作" else null,
+        ),
+    ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -396,16 +432,33 @@ private fun SyncedEntryCard(
                     modifier = Modifier.fillMaxWidth().height(112.dp),
                 )
             }
-            Text(
-                when (entry) {
-                    is SyncedBrowserEntry.Folder -> entry.name
-                    is SyncedBrowserEntry.File -> entry.item.displayName
-                },
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                maxLines = 2,
-                style = MaterialTheme.typography.titleSmall,
-                textAlign = TextAlign.Start,
-            )
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    when (entry) {
+                        is SyncedBrowserEntry.Folder -> entry.name
+                        is SyncedBrowserEntry.File -> entry.item.displayName
+                    },
+                    modifier = Modifier.weight(1f),
+                    maxLines = 2,
+                    style = MaterialTheme.typography.titleSmall,
+                    textAlign = TextAlign.Start,
+                )
+                if (entry is SyncedBrowserEntry.File) {
+                    IconButton(
+                        onClick = { onShowActions(entry.item) },
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            Icons.Rounded.MoreVert,
+                            contentDescription = "更多文件操作",
+                            modifier = Modifier.size(19.dp),
+                        )
+                    }
+                }
+            }
             Text(
                 when (entry) {
                     is SyncedBrowserEntry.Folder -> localFolderDetails(entry)
@@ -420,18 +473,26 @@ private fun SyncedEntryCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SyncedEntryListRow(
     entry: SyncedBrowserEntry,
     onOpenFolder: (SyncedBrowserEntry.Folder) -> Unit,
     onOpenFile: (SyncedFile) -> Unit,
+    onShowActions: (SyncedFile) -> Unit,
     loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,
 ) {
     val onClick = when (entry) {
         is SyncedBrowserEntry.Folder -> ({ onOpenFolder(entry) })
         is SyncedBrowserEntry.File -> ({ onOpenFile(entry.item) })
     }
-    IosGroupedSurface(modifier = Modifier.clickable(onClick = onClick)) {
+    IosGroupedSurface(
+        modifier = Modifier.combinedClickable(
+            onClick = onClick,
+            onLongClick = { (entry as? SyncedBrowserEntry.File)?.item?.let(onShowActions) },
+            onLongClickLabel = if (entry is SyncedBrowserEntry.File) "更多文件操作" else null,
+        ),
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -465,12 +526,18 @@ private fun SyncedEntryListRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Icon(
-                Icons.Rounded.ChevronRight,
-                contentDescription = if (entry is SyncedBrowserEntry.Folder) "打开文件夹" else "打开文件",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
-            )
+            if (entry is SyncedBrowserEntry.File) {
+                IconButton(onClick = { onShowActions(entry.item) }) {
+                    Icon(Icons.Rounded.MoreVert, contentDescription = "更多文件操作")
+                }
+            } else {
+                Icon(
+                    Icons.Rounded.ChevronRight,
+                    contentDescription = "打开文件夹",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
     }
 }
@@ -535,13 +602,67 @@ private fun SyncedFileVisual(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SyncedFileActionsSheet(
+    file: SyncedFile,
+    onOpenExternally: () -> Unit,
+    onShare: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            ListItem(
+                headlineContent = { Text(file.displayName, maxLines = 2, fontWeight = FontWeight.SemiBold) },
+                supportingContent = { Text(localFileDetails(file)) },
+                leadingContent = {
+                    IosIconTile(
+                        icon = if (file.isImage) Icons.Rounded.Image else syncedFileIcon(file),
+                        contentDescription = null,
+                        tint = if (file.isImage) MaterialTheme.colorScheme.secondary else syncedFileIconTint(file),
+                    )
+                },
+            )
+            HorizontalDivider()
+            ListItem(
+                headlineContent = { Text("使用其他应用打开") },
+                supportingContent = { Text("选择设备上支持此格式的应用") },
+                leadingContent = {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.InsertDriveFile,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                },
+                modifier = Modifier.clickable(onClick = onOpenExternally),
+            )
+            ListItem(
+                headlineContent = { Text("分享或发送文件") },
+                supportingContent = { Text("发送到聊天、网盘、编辑器或其他应用") },
+                leadingContent = {
+                    Icon(Icons.Rounded.Share, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                },
+                modifier = Modifier.clickable(onClick = onShare),
+            )
+            Text(
+                "目标应用只会获得该文件的临时只读访问权限。",
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 private fun SyncedImagePreviewDialog(
     file: SyncedFile,
     loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,
     onOpenExternally: () -> Unit,
+    onShare: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val zoomState = rememberImageZoomState(file.contentUri)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
@@ -559,7 +680,28 @@ private fun SyncedImagePreviewDialog(
                         maxLines = 2,
                         fontWeight = FontWeight.Medium,
                     )
-                    TextButton(onClick = onOpenExternally) { Text("其他应用", color = Color.White) }
+                    Text(
+                        "${zoomState.percentage}%",
+                        color = Color.LightGray,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    IconButton(onClick = zoomState::reset, enabled = zoomState.canReset) {
+                        Icon(
+                            Icons.Rounded.Refresh,
+                            contentDescription = "还原缩放",
+                            tint = if (zoomState.canReset) Color.White else Color.Gray,
+                        )
+                    }
+                    IconButton(onClick = onShare) {
+                        Icon(Icons.Rounded.Share, contentDescription = "分享文件", tint = Color.White)
+                    }
+                    IconButton(onClick = onOpenExternally) {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.InsertDriveFile,
+                            contentDescription = "使用其他应用打开",
+                            tint = Color.White,
+                        )
+                    }
                     IconButton(
                         onClick = onDismiss,
                         modifier = Modifier.background(Color.White.copy(alpha = 0.14f), CircleShape),
@@ -573,6 +715,7 @@ private fun SyncedImagePreviewDialog(
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     loadImage = loadImage,
+                    zoomState = zoomState,
                     fallback = {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(
@@ -587,7 +730,7 @@ private fun SyncedImagePreviewDialog(
                     },
                 )
                 Text(
-                    localFileDetails(file),
+                    "${localFileDetails(file)} · 双指缩放 / 双击切换",
                     modifier = Modifier.align(Alignment.CenterHorizontally).padding(16.dp),
                     color = Color.LightGray,
                     style = MaterialTheme.typography.bodySmall,
@@ -604,6 +747,7 @@ private fun SyncedBitmapImage(
     contentScale: ContentScale,
     modifier: Modifier,
     loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,
+    zoomState: ImageZoomState? = null,
     fallback: @Composable () -> Unit,
 ) {
     val loadState by produceState<SyncedImageState>(
@@ -624,12 +768,21 @@ private fun SyncedBitmapImage(
         when (val current = loadState) {
             SyncedImageState.Loading -> CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
             SyncedImageState.Failed -> fallback()
-            is SyncedImageState.Ready -> Image(
-                bitmap = current.bitmap.asImageBitmap(),
-                contentDescription = file.displayName,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = contentScale,
-            )
+            is SyncedImageState.Ready -> if (zoomState != null) {
+                ZoomableBitmapImage(
+                    bitmap = current.bitmap,
+                    contentDescription = file.displayName,
+                    state = zoomState,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Image(
+                    bitmap = current.bitmap.asImageBitmap(),
+                    contentDescription = file.displayName,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = contentScale,
+                )
+            }
         }
     }
 }
