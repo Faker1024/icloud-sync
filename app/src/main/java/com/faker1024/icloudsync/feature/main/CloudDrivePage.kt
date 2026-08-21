@@ -1,6 +1,9 @@
 package com.faker1024.icloudsync.feature.main
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -16,9 +19,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -72,6 +76,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -115,6 +120,7 @@ import com.github.panpf.zoomimage.subsampling.ImageSource
 import com.github.panpf.zoomimage.subsampling.fromFile
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 @Composable
@@ -962,44 +968,29 @@ private fun ImagePreviewDialog(
     val viewers = remember { mutableStateMapOf<String, ZoomImageView>() }
     val zoomPercents = remember { mutableStateMapOf<String, Int>() }
     val currentItem = images.getOrElse(pagerState.currentPage) { selectedItem }
+    var controlsVisible by remember { mutableStateOf(true) }
+    var controlsEpoch by remember { mutableIntStateOf(0) }
+    val currentViewer = viewers[currentItem.id]
+    LaunchedEffect(pagerState.currentPage) {
+        controlsVisible = true
+        controlsEpoch++
+    }
+    LaunchedEffect(controlsVisible, controlsEpoch, currentViewer) {
+        if (controlsVisible && currentViewer != null) {
+            delay(IMAGE_VIEWER_CONTROLS_TIMEOUT_MILLIS)
+            controlsVisible = false
+        }
+    }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
+        ImmersiveViewerSystemBars(controlsVisible)
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        currentItem.name,
-                        modifier = Modifier.weight(1f).padding(start = 8.dp),
-                        color = Color.White,
-                        maxLines = 1,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Text(
-                        "${pagerState.currentPage + 1}/${images.size} · ${zoomPercents[currentItem.id] ?: 100}%",
-                        color = Color.LightGray,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                    IconButton(onClick = { viewers[currentItem.id]?.zoomable?.reset() }) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = "还原缩放", tint = Color.White)
-                    }
-                    IconButton(onClick = { onDownload(currentItem) }) {
-                        Icon(Icons.Rounded.Download, contentDescription = "下载当前图片", tint = Color.White)
-                    }
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.background(Color.White.copy(alpha = 0.14f), CircleShape),
-                    ) {
-                        Icon(Icons.Rounded.Close, contentDescription = "关闭预览", tint = Color.White)
-                    }
-                }
+            Box(Modifier.fillMaxSize()) {
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    modifier = Modifier.fillMaxSize(),
                     key = { index -> images[index].id },
                 ) { page ->
                     val item = images[page]
@@ -1010,15 +1001,79 @@ private fun ImagePreviewDialog(
                         onViewerChanged = { viewer ->
                             if (viewer == null) viewers.remove(item.id) else viewers[item.id] = viewer
                         },
-                        onZoomPercentChanged = { zoomPercents[item.id] = it },
+                        onZoomPercentChanged = { percent ->
+                            val previous = zoomPercents.put(item.id, percent)
+                            if (images.getOrNull(pagerState.currentPage)?.id == item.id &&
+                                previous != null && previous != percent
+                            ) {
+                                controlsVisible = false
+                            }
+                        },
+                        onTap = {
+                            controlsVisible = !controlsVisible
+                            controlsEpoch++
+                        },
                     )
                 }
-                Text(
-                    "${fileDetails(currentItem)} · 左右滑动切换 · 双指缩放 / 双击放大",
-                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(horizontal = 16.dp, vertical = 10.dp),
-                    color = Color.LightGray,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                AnimatedVisibility(
+                    visible = controlsVisible,
+                    modifier = Modifier.align(Alignment.TopCenter).zIndex(1f),
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                ) {
+                    Surface(color = Color.Black.copy(alpha = 0.58f)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().statusBarsPadding()
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                currentItem.name,
+                                modifier = Modifier.weight(1f).padding(start = 8.dp),
+                                color = Color.White,
+                                maxLines = 1,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                "${pagerState.currentPage + 1}/${images.size} · ${zoomPercents[currentItem.id] ?: 100}%",
+                                color = Color.LightGray,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                            IconButton(onClick = {
+                                viewers[currentItem.id]?.zoomable?.reset()
+                                controlsEpoch++
+                            }) {
+                                Icon(Icons.Rounded.Refresh, contentDescription = "还原缩放", tint = Color.White)
+                            }
+                            IconButton(onClick = { onDownload(currentItem) }) {
+                                Icon(Icons.Rounded.Download, contentDescription = "下载当前图片", tint = Color.White)
+                            }
+                            IconButton(
+                                onClick = onDismiss,
+                                modifier = Modifier.background(Color.White.copy(alpha = 0.14f), CircleShape),
+                            ) {
+                                Icon(Icons.Rounded.Close, contentDescription = "关闭预览", tint = Color.White)
+                            }
+                        }
+                    }
+                }
+                AnimatedVisibility(
+                    visible = controlsVisible,
+                    modifier = Modifier.align(Alignment.BottomCenter).zIndex(1f),
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                ) {
+                    Surface(color = Color.Black.copy(alpha = 0.58f)) {
+                        Text(
+                            "${fileDetails(currentItem)} · 左右滑动切换 · 双指缩放 / 双击放大",
+                            modifier = Modifier.fillMaxWidth().navigationBarsPadding()
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            color = Color.LightGray,
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                    }
+                }
             }
         }
     }
@@ -1031,6 +1086,7 @@ private fun RemoteTiledImagePage(
     preparePreviewSource: suspend (ICloudDriveItem) -> File,
     onViewerChanged: (ZoomImageView?) -> Unit,
     onZoomPercentChanged: (Int) -> Unit,
+    onTap: () -> Unit,
 ) {
     var retryKey by remember(item.id) { mutableIntStateOf(0) }
     val loadState by produceState<PreviewViewerState>(
@@ -1074,6 +1130,7 @@ private fun RemoteTiledImagePage(
                 modifier = Modifier.fillMaxSize(),
                 onViewerChanged = onViewerChanged,
                 onZoomPercentChanged = onZoomPercentChanged,
+                onTap = onTap,
             )
         }
     }
@@ -1132,6 +1189,7 @@ private sealed interface RemoteImageState {
 }
 
 private const val VIEWER_THUMBNAIL_PIXELS = 1280
+private const val IMAGE_VIEWER_CONTROLS_TIMEOUT_MILLIS = 2_500L
 
 private fun syncStageText(stage: FolderSyncStage): String = when (stage) {
     FolderSyncStage.QUEUED -> "等待同步"

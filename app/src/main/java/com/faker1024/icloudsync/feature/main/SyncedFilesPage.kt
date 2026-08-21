@@ -1,5 +1,8 @@
 package com.faker1024.icloudsync.feature.main
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,9 +18,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -65,6 +69,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -84,6 +89,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.net.toUri
@@ -103,6 +109,7 @@ import java.util.Date
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -688,55 +695,29 @@ private fun SyncedImagePreviewDialog(
     val viewers = remember { mutableStateMapOf<String, ZoomImageView>() }
     val zoomPercents = remember { mutableStateMapOf<String, Int>() }
     val currentFile = images.getOrElse(pagerState.currentPage) { selectedFile }
+    var controlsVisible by remember { mutableStateOf(true) }
+    var controlsEpoch by remember { mutableIntStateOf(0) }
+    val currentViewer = viewers[currentFile.contentUri]
+    LaunchedEffect(pagerState.currentPage) {
+        controlsVisible = true
+        controlsEpoch++
+    }
+    LaunchedEffect(controlsVisible, controlsEpoch, currentViewer) {
+        if (controlsVisible && currentViewer != null) {
+            delay(IMAGE_VIEWER_CONTROLS_TIMEOUT_MILLIS)
+            controlsVisible = false
+        }
+    }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
+        ImmersiveViewerSystemBars(controlsVisible)
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        currentFile.displayName,
-                        modifier = Modifier.weight(1f).padding(start = 8.dp),
-                        color = Color.White,
-                        maxLines = 1,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Text(
-                        "${pagerState.currentPage + 1}/${images.size} · ${zoomPercents[currentFile.contentUri] ?: 100}%",
-                        color = Color.LightGray,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                    IconButton(onClick = { viewers[currentFile.contentUri]?.zoomable?.reset() }) {
-                        Icon(
-                            Icons.Rounded.Refresh,
-                            contentDescription = "还原缩放",
-                            tint = Color.White,
-                        )
-                    }
-                    IconButton(onClick = { onShare(currentFile) }) {
-                        Icon(Icons.Rounded.Share, contentDescription = "分享文件", tint = Color.White)
-                    }
-                    IconButton(onClick = { onOpenExternally(currentFile) }) {
-                        Icon(
-                            Icons.AutoMirrored.Rounded.InsertDriveFile,
-                            contentDescription = "使用其他应用打开",
-                            tint = Color.White,
-                        )
-                    }
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.background(Color.White.copy(alpha = 0.14f), CircleShape),
-                    ) {
-                        Icon(Icons.Rounded.Close, contentDescription = "关闭预览", tint = Color.White)
-                    }
-                }
+            Box(Modifier.fillMaxSize()) {
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    modifier = Modifier.fillMaxSize(),
                     key = { index -> images[index].contentUri },
                 ) { page ->
                     val file = images[page]
@@ -747,15 +728,86 @@ private fun SyncedImagePreviewDialog(
                             if (viewer == null) viewers.remove(file.contentUri)
                             else viewers[file.contentUri] = viewer
                         },
-                        onZoomPercentChanged = { zoomPercents[file.contentUri] = it },
+                        onZoomPercentChanged = { percent ->
+                            val previous = zoomPercents.put(file.contentUri, percent)
+                            if (images.getOrNull(pagerState.currentPage)?.contentUri == file.contentUri &&
+                                previous != null && previous != percent
+                            ) {
+                                controlsVisible = false
+                            }
+                        },
+                        onTap = {
+                            controlsVisible = !controlsVisible
+                            controlsEpoch++
+                        },
                     )
                 }
-                Text(
-                    "${localFileDetails(currentFile)} · 左右滑动切换 · 双指缩放 / 双击放大",
-                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(horizontal = 16.dp, vertical = 10.dp),
-                    color = Color.LightGray,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                AnimatedVisibility(
+                    visible = controlsVisible,
+                    modifier = Modifier.align(Alignment.TopCenter).zIndex(1f),
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                ) {
+                    Surface(color = Color.Black.copy(alpha = 0.58f)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().statusBarsPadding()
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                currentFile.displayName,
+                                modifier = Modifier.weight(1f).padding(start = 8.dp),
+                                color = Color.White,
+                                maxLines = 1,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                "${pagerState.currentPage + 1}/${images.size} · ${zoomPercents[currentFile.contentUri] ?: 100}%",
+                                color = Color.LightGray,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                            IconButton(onClick = {
+                                viewers[currentFile.contentUri]?.zoomable?.reset()
+                                controlsEpoch++
+                            }) {
+                                Icon(Icons.Rounded.Refresh, contentDescription = "还原缩放", tint = Color.White)
+                            }
+                            IconButton(onClick = { onShare(currentFile) }) {
+                                Icon(Icons.Rounded.Share, contentDescription = "分享文件", tint = Color.White)
+                            }
+                            IconButton(onClick = { onOpenExternally(currentFile) }) {
+                                Icon(
+                                    Icons.AutoMirrored.Rounded.InsertDriveFile,
+                                    contentDescription = "使用其他应用打开",
+                                    tint = Color.White,
+                                )
+                            }
+                            IconButton(
+                                onClick = onDismiss,
+                                modifier = Modifier.background(Color.White.copy(alpha = 0.14f), CircleShape),
+                            ) {
+                                Icon(Icons.Rounded.Close, contentDescription = "关闭预览", tint = Color.White)
+                            }
+                        }
+                    }
+                }
+                AnimatedVisibility(
+                    visible = controlsVisible,
+                    modifier = Modifier.align(Alignment.BottomCenter).zIndex(1f),
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                ) {
+                    Surface(color = Color.Black.copy(alpha = 0.58f)) {
+                        Text(
+                            "${localFileDetails(currentFile)} · 左右滑动切换 · 双指缩放 / 双击放大",
+                            modifier = Modifier.fillMaxWidth().navigationBarsPadding()
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            color = Color.LightGray,
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
             }
         }
     }
@@ -767,6 +819,7 @@ private fun LocalTiledImagePage(
     loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,
     onViewerChanged: (ZoomImageView?) -> Unit,
     onZoomPercentChanged: (Int) -> Unit,
+    onTap: () -> Unit,
 ) {
     val context = LocalContext.current.applicationContext
     var retryKey by remember(file.contentUri) { mutableIntStateOf(0) }
@@ -803,6 +856,7 @@ private fun LocalTiledImagePage(
                 modifier = Modifier.fillMaxSize(),
                 onViewerChanged = onViewerChanged,
                 onZoomPercentChanged = onZoomPercentChanged,
+                onTap = onTap,
             )
         }
     }
@@ -846,6 +900,7 @@ private fun SyncedBitmapImage(
 }
 
 private const val LOCAL_VIEWER_THUMBNAIL_PIXELS = 1280
+private const val IMAGE_VIEWER_CONTROLS_TIMEOUT_MILLIS = 2_500L
 
 private sealed interface SyncedImageState {
     data object Loading : SyncedImageState
