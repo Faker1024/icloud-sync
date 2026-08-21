@@ -14,10 +14,14 @@ import kotlinx.coroutines.flow.map
 private val Context.cloudBrowserDataStore by preferencesDataStore(name = "cloud_browser_settings")
 
 enum class CloudBrowserLayout { LIST, GRID }
+enum class CloudSortField { NAME, MODIFIED_TIME, SIZE, FILE_TYPE }
+enum class CloudSortDirection { ASCENDING, DESCENDING }
 
 data class CloudBrowserPreferences(
     val layout: CloudBrowserLayout = CloudBrowserLayout.GRID,
     val iconSize: Float = DEFAULT_ICON_SIZE,
+    val sortField: CloudSortField = CloudSortField.NAME,
+    val sortDirection: CloudSortDirection = CloudSortDirection.ASCENDING,
     val lastSyncId: String? = null,
     val lastSyncFolderId: String? = null,
     val lastSyncFolderName: String? = null,
@@ -30,6 +34,8 @@ class CloudBrowserSettings @Inject constructor(
 ) {
     private val layoutKey = stringPreferencesKey("layout")
     private val iconSizeKey = floatPreferencesKey("icon_size")
+    private val sortFieldKey = stringPreferencesKey("sort_field")
+    private val sortDirectionKey = stringPreferencesKey("sort_direction")
     private val lastSyncIdKey = stringPreferencesKey("last_sync_id")
     private val lastSyncFolderIdKey = stringPreferencesKey("last_sync_folder_id")
     private val lastSyncFolderNameKey = stringPreferencesKey("last_sync_folder_name")
@@ -41,6 +47,8 @@ class CloudBrowserSettings @Inject constructor(
                 CloudBrowserLayout.valueOf(values[layoutKey].orEmpty())
             }.getOrDefault(CloudBrowserLayout.GRID),
             iconSize = clampIconSize(values[iconSizeKey] ?: DEFAULT_ICON_SIZE),
+            sortField = enumPreference(values[sortFieldKey], CloudSortField.NAME),
+            sortDirection = enumPreference(values[sortDirectionKey], CloudSortDirection.ASCENDING),
             lastSyncId = values[lastSyncIdKey],
             lastSyncFolderId = values[lastSyncFolderIdKey],
             lastSyncFolderName = values[lastSyncFolderNameKey],
@@ -54,6 +62,13 @@ class CloudBrowserSettings @Inject constructor(
 
     suspend fun setIconSize(value: Float) {
         context.cloudBrowserDataStore.edit { it[iconSizeKey] = clampIconSize(value) }
+    }
+
+    suspend fun setSorting(field: CloudSortField, direction: CloudSortDirection) {
+        context.cloudBrowserDataStore.edit { values ->
+            values[sortFieldKey] = field.name
+            values[sortDirectionKey] = direction.name
+        }
     }
 
     suspend fun setLastSync(
@@ -70,6 +85,9 @@ class CloudBrowserSettings @Inject constructor(
         }
     }
 }
+
+private inline fun <reified T : Enum<T>> enumPreference(value: String?, fallback: T): T =
+    runCatching { enumValueOf<T>(value.orEmpty()) }.getOrDefault(fallback)
 
 internal fun clampIconSize(value: Float): Float = value.coerceIn(MIN_ICON_SIZE, MAX_ICON_SIZE)
 

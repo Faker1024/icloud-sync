@@ -37,6 +37,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -67,7 +68,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.faker1024.icloudsync.core.icloud.ICloudDriveItem
 import com.faker1024.icloudsync.core.icloud.TrustedPhone
 import com.faker1024.icloudsync.core.icloud.isPreviewableImage
+import com.faker1024.icloudsync.core.icloud.sortCloudDriveItems
 import com.faker1024.icloudsync.core.settings.CloudBrowserLayout
+import com.faker1024.icloudsync.core.settings.CloudSortDirection
+import com.faker1024.icloudsync.core.settings.CloudSortField
 import com.faker1024.icloudsync.core.settings.MAX_ICON_SIZE
 import com.faker1024.icloudsync.core.settings.MIN_ICON_SIZE
 import com.faker1024.icloudsync.core.sync.FolderSyncStage
@@ -117,6 +121,7 @@ fun CloudDrivePage(
                 onCancelSync = viewModel::cancelFolderSync,
                 onSetLayout = viewModel::setLayout,
                 onSetIconSize = viewModel::setIconSize,
+                onSetSorting = viewModel::setSorting,
                 loadPreview = viewModel::loadImagePreview,
                 onLogout = viewModel::logout,
                 onClearError = viewModel::clearError,
@@ -315,6 +320,7 @@ private fun BrowserPage(
     onCancelSync: () -> Unit,
     onSetLayout: (CloudBrowserLayout) -> Unit,
     onSetIconSize: (Float) -> Unit,
+    onSetSorting: (CloudSortField, CloudSortDirection) -> Unit,
     loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
     onLogout: () -> Unit,
     onClearError: () -> Unit,
@@ -323,6 +329,12 @@ private fun BrowserPage(
     var previewItem by remember { mutableStateOf<ICloudDriveItem?>(null) }
     var showIconSizeDialog by rememberSaveable { mutableStateOf(false) }
     var pendingIconSize by rememberSaveable { mutableFloatStateOf(state.iconSize) }
+    var showSortDialog by rememberSaveable { mutableStateOf(false) }
+    var pendingSortField by rememberSaveable { mutableStateOf(state.sortField) }
+    var pendingSortDirection by rememberSaveable { mutableStateOf(state.sortDirection) }
+    val displayedItems = remember(state.items, state.sortField, state.sortDirection) {
+        sortCloudDriveItems(state.items, state.sortField, state.sortDirection)
+    }
 
     pendingSyncFolder?.let { folder ->
         val relative = state.path.drop(1).map { it.name } + folder.name
@@ -377,6 +389,60 @@ private fun BrowserPage(
             },
         )
     }
+    if (showSortDialog) {
+        AlertDialog(
+            onDismissRequest = { showSortDialog = false },
+            title = { Text("排序方式") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    CloudSortField.entries.forEach { field ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable { pendingSortField = field },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = pendingSortField == field,
+                                onClick = { pendingSortField = field },
+                            )
+                            Text(sortFieldLabel(field))
+                        }
+                    }
+                    Text(
+                        "排列顺序",
+                        modifier = Modifier.padding(start = 12.dp, top = 8.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    CloudSortDirection.entries.forEach { direction ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable { pendingSortDirection = direction },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = pendingSortDirection == direction,
+                                onClick = { pendingSortDirection = direction },
+                            )
+                            Text(sortDirectionLabel(direction, pendingSortField))
+                        }
+                    }
+                    Text(
+                        "文件夹始终显示在文件前面",
+                        modifier = Modifier.padding(start = 12.dp, top = 8.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onSetSorting(pendingSortField, pendingSortDirection)
+                    showSortDialog = false
+                }) { Text("应用") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSortDialog = false }) { Text("取消") }
+            },
+        )
+    }
     previewItem?.let { item ->
         ImagePreviewDialog(
             item = item,
@@ -426,7 +492,14 @@ private fun BrowserPage(
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            OutlinedButton(
+            TextButton(onClick = {
+                pendingSortField = state.sortField
+                pendingSortDirection = state.sortDirection
+                showSortDialog = true
+            }) {
+                Text("排序 ${sortFieldShortLabel(state.sortField)}${sortDirectionArrow(state.sortDirection)}")
+            }
+            TextButton(
                 onClick = {
                     onSetLayout(
                         if (state.layout == CloudBrowserLayout.LIST) CloudBrowserLayout.GRID
@@ -436,7 +509,7 @@ private fun BrowserPage(
             ) {
                 Text(if (state.layout == CloudBrowserLayout.LIST) "▦ 网格" else "☷ 列表")
             }
-            OutlinedButton(onClick = {
+            TextButton(onClick = {
                 pendingIconSize = state.iconSize
                 showIconSizeDialog = true
             }) { Text("大小") }
@@ -455,7 +528,7 @@ private fun BrowserPage(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    listItems(state.items, key = ICloudDriveItem::id) { item ->
+                    listItems(displayedItems, key = ICloudDriveItem::id) { item ->
                         DriveItemRow(
                             item = item,
                             iconSize = state.iconSize,
@@ -477,7 +550,7 @@ private fun BrowserPage(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    gridItems(state.items, key = ICloudDriveItem::id) { item ->
+                    gridItems(displayedItems, key = ICloudDriveItem::id) { item ->
                         DriveItemGridCell(
                             item = item,
                             iconSize = state.iconSize,
@@ -781,6 +854,40 @@ private fun syncStageText(stage: FolderSyncStage): String = when (stage) {
     FolderSyncStage.COMPLETE -> "同步完成"
     FolderSyncStage.FAILED -> "同步未完成"
 }
+
+private fun sortFieldLabel(field: CloudSortField): String = when (field) {
+    CloudSortField.NAME -> "文件名称"
+    CloudSortField.MODIFIED_TIME -> "修改时间"
+    CloudSortField.SIZE -> "文件大小"
+    CloudSortField.FILE_TYPE -> "文件类型"
+}
+
+private fun sortFieldShortLabel(field: CloudSortField): String = when (field) {
+    CloudSortField.NAME -> "名称"
+    CloudSortField.MODIFIED_TIME -> "时间"
+    CloudSortField.SIZE -> "大小"
+    CloudSortField.FILE_TYPE -> "类型"
+}
+
+private fun sortDirectionLabel(direction: CloudSortDirection, field: CloudSortField): String =
+    when (field) {
+        CloudSortField.NAME,
+        CloudSortField.FILE_TYPE,
+        -> if (direction == CloudSortDirection.ASCENDING) "升序（A → Z）" else "降序（Z → A）"
+        CloudSortField.MODIFIED_TIME -> if (direction == CloudSortDirection.ASCENDING) {
+            "升序（最早优先）"
+        } else {
+            "降序（最新优先）"
+        }
+        CloudSortField.SIZE -> if (direction == CloudSortDirection.ASCENDING) {
+            "升序（最小优先）"
+        } else {
+            "降序（最大优先）"
+        }
+    }
+
+private fun sortDirectionArrow(direction: CloudSortDirection): String =
+    if (direction == CloudSortDirection.ASCENDING) "↑" else "↓"
 
 @Composable
 private fun ErrorCard(message: String, onDismiss: () -> Unit, modifier: Modifier = Modifier) {

@@ -14,6 +14,8 @@ import com.faker1024.icloudsync.core.icloud.ICloudPcsPollResult
 import com.faker1024.icloudsync.core.icloud.TrustedPhone
 import com.faker1024.icloudsync.core.settings.CloudBrowserLayout
 import com.faker1024.icloudsync.core.settings.CloudBrowserSettings
+import com.faker1024.icloudsync.core.settings.CloudSortDirection
+import com.faker1024.icloudsync.core.settings.CloudSortField
 import com.faker1024.icloudsync.core.sync.FolderSyncCoordinator
 import com.faker1024.icloudsync.core.sync.FolderSyncProgressKeys
 import com.faker1024.icloudsync.core.sync.FolderSyncStage
@@ -52,6 +54,8 @@ class CloudDriveViewModel @Inject constructor(
                     it.copy(
                         layout = preferences.layout,
                         iconSize = preferences.iconSize,
+                        sortField = preferences.sortField,
+                        sortDirection = preferences.sortDirection,
                     )
                 }
                 val syncId = preferences.lastSyncId?.let { value ->
@@ -191,6 +195,11 @@ class CloudDriveViewModel @Inject constructor(
     fun setIconSize(value: Float) {
         _state.update { it.copy(iconSize = value) }
         viewModelScope.launch { browserSettings.setIconSize(value) }
+    }
+
+    fun setSorting(field: CloudSortField, direction: CloudSortDirection) {
+        _state.update { it.copy(sortField = field, sortDirection = direction) }
+        viewModelScope.launch { browserSettings.setSorting(field, direction) }
     }
 
     suspend fun loadImagePreview(item: ICloudDriveItem, targetPixels: Int): Bitmap =
@@ -364,6 +373,8 @@ class CloudDriveViewModel @Inject constructor(
         error = error,
         layout = _state.value.layout,
         iconSize = _state.value.iconSize,
+        sortField = _state.value.sortField,
+        sortDirection = _state.value.sortDirection,
     )
 }
 
@@ -380,6 +391,8 @@ data class CloudDriveUiState(
     val pcsMessage: String = "",
     val layout: CloudBrowserLayout = CloudBrowserLayout.GRID,
     val iconSize: Float = 88f,
+    val sortField: CloudSortField = CloudSortField.NAME,
+    val sortDirection: CloudSortDirection = CloudSortDirection.ASCENDING,
     val folderSync: FolderSyncUiState? = null,
 )
 
