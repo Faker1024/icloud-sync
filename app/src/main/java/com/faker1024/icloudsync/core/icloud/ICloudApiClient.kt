@@ -13,6 +13,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -226,6 +227,59 @@ internal class ICloudApiClient @Inject constructor(
             throw ICloudApiException(ICloudError.INVALID_RESPONSE, "iCloud 返回了不受信任的下载地址")
         }
         return ICloudDownloadTicket(downloadUrl, cookieJar.headerFor(parsed))
+    }
+
+    fun openDownload(item: ICloudDriveItem): ICloudDownloadSource {
+        val ticket = downloadTicket(item)
+        var target = ticket.url.toHttpUrl()
+        var cookieHeader = ticket.cookieHeader
+        repeat(MAX_DOWNLOAD_REDIRECTS + 1) { redirectCount ->
+            val request = Request.Builder()
+                .url(target)
+                .get()
+                .header("Accept", "*/*")
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", "$HOME_ENDPOINT/")
+                .apply { cookieHeader.takeIf(String::isNotBlank)?.let { header("Cookie", it) } }
+                .build()
+            val response = try {
+                httpClient.newCall(request).execute()
+            } catch (_: IOException) {
+                throw ICloudApiException(ICloudError.NETWORK, "下载文件时无法连接 iCloud")
+            }
+            extractSessionHeaders(response.headers)
+            if (response.code == 330 || response.code in 300..399) {
+                val location = response.header("Location")
+                response.close()
+                if (redirectCount >= MAX_DOWNLOAD_REDIRECTS || location.isNullOrBlank()) {
+                    throw ICloudApiException(ICloudError.INVALID_RESPONSE, "iCloud 下载跳转次数过多")
+                }
+                val redirected = target.resolve(location)
+                    ?: throw ICloudApiException(ICloudError.INVALID_RESPONSE, "iCloud 下载跳转地址无效")
+                if (redirected.scheme != "https" || !isTrustedAppleHost(redirected.host)) {
+                    throw ICloudApiException(ICloudError.INVALID_RESPONSE, "iCloud 下载跳转到了不受信任的地址")
+                }
+                target = redirected
+                cookieHeader = cookieJar.headerFor(redirected)
+            } else {
+                if (!response.isSuccessful) {
+                    val status = response.code
+                    response.close()
+                    throw httpError(status)
+                }
+                val body = response.body
+                    ?: run {
+                        response.close()
+                        throw ICloudApiException(ICloudError.INVALID_RESPONSE, "iCloud 下载内容为空")
+                    }
+                return ICloudDownloadSource(
+                    response = response,
+                    contentLength = body.contentLength(),
+                    mimeType = body.contentType()?.toString(),
+                )
+            }
+        }
+        throw ICloudApiException(ICloudError.INVALID_RESPONSE, "iCloud 下载地址无效")
     }
 
     fun logout() {
@@ -455,6 +509,7 @@ internal class ICloudApiClient @Inject constructor(
         const val DEFAULT_ZONE = "com.apple.CloudDocs"
         const val HEADER_SESSION_TOKEN = "X-Apple-Session-Token"
         const val PCS_DOCUMENTS_COOKIE = "X-APPLE-WEBAUTH-PCS-Documents"
+        const val MAX_DOWNLOAD_REDIRECTS = 5
         const val WIDGET_KEY = "d39ba9916b7251055b22c7f910e2ea796ee65e98b2ddecea8f5dde8d9d1a815d"
         const val USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
             "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3.1 Safari/605.1.15"
@@ -463,6 +518,17 @@ internal class ICloudApiClient @Inject constructor(
 }
 
 internal data class ICloudDownloadTicket(val url: String, val cookieHeader: String)
+
+internal class ICloudDownloadSource(
+    private val response: Response,
+    val contentLength: Long,
+    val mimeType: String?,
+) : AutoCloseable {
+    val inputStream
+        get() = checkNotNull(response.body).byteStream()
+
+    override fun close() = response.close()
+}
 
 internal object ICloudPcsProtocol {
     fun evaluate(status: String, hasDocumentsCookie: Boolean): ICloudPcsPollResult {

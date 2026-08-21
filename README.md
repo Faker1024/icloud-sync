@@ -13,7 +13,10 @@
 - 原生双重认证界面，支持受信任设备推送和短信验证码。
 - 支持高级数据保护账户的 PCS 授权，在受信任设备批准后取得云盘解密授权。
 - 浏览整个 iCloud Drive 的文件夹和任意类型文件。
-- 获取 iCloud Document 下载地址后交给 Android `DownloadManager`。
+- 图片文件显示真实缩略图，点击可在 App 内全屏预览。
+- 文件管理器支持列表/网格切换，缩略图与文件图标可在 48–144 dp 之间调整并持久保存。
+- 单文件下载继续交给 Android `DownloadManager`；长按文件夹可递归同步全部文件并保留目录层级。
+- 文件夹同步由 WorkManager 在后台执行，逐文件原子写入、字节数校验、即时重试和指数退避任务重试。
 - 下载地址强制 HTTPS 并执行 Apple/iCloud 主机白名单校验。
 - 原始文件保存到公共目录 `Download/iCloud Drive/`，不把非媒体文件写入图库。
 - 会话令牌和 Cookie 使用 Android Keystore AES-GCM 加密保存，可随时退出并清除。
@@ -27,7 +30,8 @@
 | Apple 账户密码 | 仅在登录期间驻留内存，不保存 |
 | 双重认证验证码 | 仅用于本次验证，不保存 |
 | 会话令牌和 Cookie | Android Keystore AES-GCM 加密后保存在 App 私有空间 |
-| 云盘原始文件 | `Download/iCloud Drive/` |
+| 云盘原始文件 | `Download/iCloud Drive/`；文件夹同步保留其云端层级 |
+| 图片预览缓存 | App 私有缓存；退出 iCloud 登录时清除 |
 | 用户主动导入的照片/视频 | `DCIM/iCloud Photos/` |
 | 文件与账户数据 | 全程设备直连 iCloud，不经过开发者服务器 |
 
@@ -39,7 +43,7 @@
 - MVVM、Coroutines、StateFlow
 - OkHttp、`org.json`
 - Android Keystore、SRP-6a（RFC 5054 2048-bit group / SHA-256）
-- Android DownloadManager、Storage Access Framework、MediaStore
+- Android DownloadManager、Storage Access Framework、MediaStore、WorkManager
 - Room、DataStore、WorkManager、Hilt
 - `minSdk 29`、`compileSdk/targetSdk 36`
 
@@ -68,8 +72,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 私有接口没有兼容性承诺，不能保证 Apple 调整后仍可用。
 - 高级数据保护账户必须开启“允许访问 iCloud 数据”，并在每次 Apple 要求时使用受信任设备批准临时访问。
 - 首次登录、双重认证和真实文件下载必须使用测试专用中国大陆 Apple 账户在真机验证；仓库与自动化测试不包含任何账户凭据。
-- App 目前提供浏览和手动下载，不执行后台云端增量检测、双向同步、云端删除或上传。
-- 下载目录暂不镜像 iCloud 文件夹层级；同名文件自动追加序号。
+- 文件夹同步必须由用户长按主动发起；不执行定时增量检测、双向同步、云端删除或上传。
+- 文件夹同步会镜像包含文件的目录层级，但 Android MediaStore 无法单独发布完全空的目录。
+- Apple 下载接口没有为所有文件提供可验证内容哈希；App 以响应 `Content-Length`（缺失时使用云端大小）验证是否完整写入。
 - 如果账户尚未同意最新版 iCloud 中国区网页条款，需先在 Apple 官方入口完成同意。
 
 ## 文档与来源

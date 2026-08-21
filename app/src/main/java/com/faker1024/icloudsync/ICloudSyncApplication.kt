@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import androidx.work.Configuration
 import androidx.hilt.work.HiltWorkerFactory
 import com.faker1024.icloudsync.core.worker.ImportNotifications
+import com.faker1024.icloudsync.core.worker.FolderSyncNotifications
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -22,7 +23,7 @@ class ICloudSyncApplication : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
-        val channel = NotificationChannel(
+        val importChannel = NotificationChannel(
             ImportNotifications.CHANNEL_ID,
             getString(R.string.import_notification_channel),
             NotificationManager.IMPORTANCE_LOW,
@@ -30,6 +31,16 @@ class ICloudSyncApplication : Application(), Configuration.Provider {
             description = "显示本地照片导入进度"
             setShowBadge(false)
         }
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        val syncChannel = NotificationChannel(
+            FolderSyncNotifications.CHANNEL_ID,
+            getString(R.string.folder_sync_notification_channel),
+            NotificationManager.IMPORTANCE_LOW,
+        ).apply {
+            description = "显示 iCloud 文件夹下载与校验进度"
+            setShowBadge(false)
+        }
+        getSystemService(NotificationManager::class.java).createNotificationChannels(
+            listOf(importChannel, syncChannel),
+        )
     }
 }

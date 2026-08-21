@@ -1,7 +1,10 @@
 package com.faker1024.icloudsync.core.icloud
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.webkit.MimeTypeMap
+import com.faker1024.icloudsync.core.sync.DownloadStoreResult
+import com.faker1024.icloudsync.core.sync.ICloudDownloadStore
 import com.faker1024.icloudsync.core.web.CloudDriveDownloads
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -13,6 +16,8 @@ import kotlinx.coroutines.withContext
 class ICloudDriveRepository @Inject internal constructor(
     private val api: ICloudApiClient,
     @param:ApplicationContext private val context: Context,
+    private val previewLoader: ICloudPreviewLoader,
+    private val downloadStore: ICloudDownloadStore,
 ) {
     suspend fun restoreSession(): Boolean = withContext(Dispatchers.IO) { api.restoreSession() }
 
@@ -44,7 +49,27 @@ class ICloudDriveRepository @Inject internal constructor(
         ).getOrThrow()
     }
 
-    fun logout() = api.logout()
+    suspend fun loadImagePreview(item: ICloudDriveItem, targetPixels: Int): Bitmap =
+        previewLoader.load(item, targetPixels)
+
+    suspend fun saveSyncedFile(
+        item: ICloudDriveItem,
+        directories: List<String>,
+    ): DownloadStoreResult = withContext(Dispatchers.IO) {
+        api.openDownload(item).use { source ->
+            downloadStore.save(
+                item = item,
+                directories = directories,
+                source = source,
+                mimeType = source.mimeType ?: mimeTypeFor(item.name),
+            )
+        }
+    }
+
+    fun logout() {
+        api.logout()
+        previewLoader.clear()
+    }
 
     private fun mimeTypeFor(name: String): String {
         val extension = name.substringAfterLast('.', "").lowercase()

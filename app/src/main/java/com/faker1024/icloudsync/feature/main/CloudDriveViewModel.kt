@@ -1,7 +1,9 @@
 package com.faker1024.icloudsync.feature.main
 
+import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkInfo
 import com.faker1024.icloudsync.core.icloud.ICloudDriveItem
 import com.faker1024.icloudsync.core.icloud.ICloudDriveRepository
 import com.faker1024.icloudsync.core.icloud.ICloudApiException
@@ -10,6 +12,11 @@ import com.faker1024.icloudsync.core.icloud.ICloudFolder
 import com.faker1024.icloudsync.core.icloud.ICloudLoginResult
 import com.faker1024.icloudsync.core.icloud.ICloudPcsPollResult
 import com.faker1024.icloudsync.core.icloud.TrustedPhone
+import com.faker1024.icloudsync.core.settings.CloudBrowserLayout
+import com.faker1024.icloudsync.core.settings.CloudBrowserSettings
+import com.faker1024.icloudsync.core.sync.FolderSyncCoordinator
+import com.faker1024.icloudsync.core.sync.FolderSyncProgressKeys
+import com.faker1024.icloudsync.core.sync.FolderSyncStage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -19,20 +26,48 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 @HiltViewModel
 class CloudDriveViewModel @Inject constructor(
     private val repository: ICloudDriveRepository,
+    private val browserSettings: CloudBrowserSettings,
+    private val folderSyncCoordinator: FolderSyncCoordinator,
 ) : ViewModel() {
     private val _state = MutableStateFlow(CloudDriveUiState())
     val state = _state.asStateFlow()
     private val _events = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val events = _events.asSharedFlow()
     private var pcsApprovalJob: Job? = null
+    private var syncObservationJob: Job? = null
+    private var observedSyncId: UUID? = null
 
     init {
+        viewModelScope.launch {
+            browserSettings.preferences.collectLatest { preferences ->
+                _state.update {
+                    it.copy(
+                        layout = preferences.layout,
+                        iconSize = preferences.iconSize,
+                    )
+                }
+                val syncId = preferences.lastSyncId?.let { value ->
+                    runCatching { UUID.fromString(value) }.getOrNull()
+                }
+                if (syncId != null && syncId != observedSyncId) {
+                    observedSyncId = syncId
+                    observeFolderSync(
+                        id = syncId,
+                        folderId = preferences.lastSyncFolderId.orEmpty(),
+                        folderName = preferences.lastSyncFolderName ?: "iCloud 文件夹",
+                        displayPath = preferences.lastSyncDisplayPath ?: "Download/iCloud Drive/",
+                    )
+                }
+            }
+        }
         viewModelScope.launch {
             val restored = runCatching { repository.restoreSession() }.getOrDefault(false)
             if (restored) {
@@ -61,9 +96,7 @@ class CloudDriveViewModel @Inject constructor(
                 }
                 .onFailure { error ->
                     repository.logout()
-                    _state.update {
-                        CloudDriveUiState(phase = CloudDrivePhase.LOGGED_OUT, error = error.userMessage())
-                    }
+                    _state.value = loggedOutState(error.userMessage())
                 }
         }
     }
@@ -134,13 +167,47 @@ class CloudDriveViewModel @Inject constructor(
         }
     }
 
+    fun syncFolder(item: ICloudDriveItem) {
+        if (!item.isFolder) return
+        val localPath = _state.value.path.drop(1).map(ICloudFolder::name) + item.name
+        viewModelScope.launch {
+            runCatching { folderSyncCoordinator.enqueue(item.id, item.name, localPath) }
+                .onSuccess { _events.emit("已开始同步 ${item.name}，失败文件会自动重试") }
+                .onFailure { _events.emit(it.userMessage()) }
+        }
+    }
+
+    fun cancelFolderSync() {
+        val workId = _state.value.folderSync?.workId ?: return
+        folderSyncCoordinator.cancel(workId)
+        _events.tryEmit("已取消文件夹同步")
+    }
+
+    fun setLayout(layout: CloudBrowserLayout) {
+        _state.update { it.copy(layout = layout) }
+        viewModelScope.launch { browserSettings.setLayout(layout) }
+    }
+
+    fun setIconSize(value: Float) {
+        _state.update { it.copy(iconSize = value) }
+        viewModelScope.launch { browserSettings.setIconSize(value) }
+    }
+
+    suspend fun loadImagePreview(item: ICloudDriveItem, targetPixels: Int): Bitmap =
+        repository.loadImagePreview(item, targetPixels)
+
     fun retryPcsApproval() = startPcsApproval()
 
     fun logout() {
         pcsApprovalJob?.cancel()
         pcsApprovalJob = null
+        _state.value.folderSync?.takeIf(FolderSyncUiState::isActive)?.let {
+            folderSyncCoordinator.cancel(it.workId)
+        }
+        syncObservationJob?.cancel()
+        syncObservationJob = null
         repository.logout()
-        _state.value = CloudDriveUiState(phase = CloudDrivePhase.LOGGED_OUT)
+        _state.value = loggedOutState()
         _events.tryEmit("已清除本机 iCloud 登录会话")
     }
 
@@ -255,13 +322,49 @@ class CloudDriveViewModel @Inject constructor(
                     val message = error.userMessage()
                     if ((error as? ICloudApiException)?.reason == ICloudError.SESSION_EXPIRED) {
                         repository.logout()
-                        _state.value = CloudDriveUiState(phase = CloudDrivePhase.LOGGED_OUT, error = message)
+                        _state.value = loggedOutState(message)
                     } else {
                         _state.update { it.copy(isBusy = false, error = message) }
                     }
                 }
         }
     }
+
+    private fun observeFolderSync(
+        id: UUID,
+        folderId: String,
+        folderName: String,
+        displayPath: String,
+    ) {
+        syncObservationJob?.cancel()
+        _state.update {
+            it.copy(
+                folderSync = FolderSyncUiState(
+                    workId = id,
+                    folderId = folderId,
+                    folderName = folderName,
+                    displayPath = displayPath,
+                    stage = FolderSyncStage.QUEUED,
+                ),
+            )
+        }
+        syncObservationJob = viewModelScope.launch {
+            folderSyncCoordinator.observe(id).collect { info ->
+                if (info != null) {
+                    _state.update {
+                        it.copy(folderSync = info.toFolderSyncUi(folderId, folderName, displayPath))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun loggedOutState(error: String? = null): CloudDriveUiState = CloudDriveUiState(
+        phase = CloudDrivePhase.LOGGED_OUT,
+        error = error,
+        layout = _state.value.layout,
+        iconSize = _state.value.iconSize,
+    )
 }
 
 data class CloudDriveUiState(
@@ -275,11 +378,75 @@ data class CloudDriveUiState(
     val error: String? = null,
     val pcsAttempt: Int = 0,
     val pcsMessage: String = "",
+    val layout: CloudBrowserLayout = CloudBrowserLayout.GRID,
+    val iconSize: Float = 88f,
+    val folderSync: FolderSyncUiState? = null,
 )
+
+data class FolderSyncUiState(
+    val workId: UUID,
+    val folderId: String,
+    val folderName: String,
+    val displayPath: String,
+    val stage: FolderSyncStage,
+    val scannedFolders: Int = 0,
+    val totalFiles: Int = 0,
+    val completedFiles: Int = 0,
+    val failedFiles: Int = 0,
+    val totalBytes: Long = 0L,
+    val completedBytes: Long = 0L,
+    val currentFile: String = "",
+    val error: String? = null,
+) {
+    val isActive: Boolean
+        get() = stage in setOf(
+            FolderSyncStage.QUEUED,
+            FolderSyncStage.SCANNING,
+            FolderSyncStage.DOWNLOADING,
+            FolderSyncStage.RETRYING,
+        )
+}
 
 enum class CloudDrivePhase { RESTORING, LOGGED_OUT, AUTHENTICATING, TWO_FACTOR, PCS_APPROVAL, BROWSING }
 
 private fun Throwable.userMessage(): String = message?.takeIf(String::isNotBlank) ?: "操作失败，请稍后重试"
+
+private fun WorkInfo.toFolderSyncUi(
+    folderId: String,
+    folderName: String,
+    displayPath: String,
+): FolderSyncUiState {
+    val data = if (state.isFinished) outputData else progress
+    val reportedStage = data.getString(FolderSyncProgressKeys.STAGE)?.let { value ->
+        runCatching { FolderSyncStage.valueOf(value) }.getOrNull()
+    }
+    val stage = reportedStage ?: when (state) {
+        WorkInfo.State.SUCCEEDED -> FolderSyncStage.COMPLETE
+        WorkInfo.State.FAILED,
+        WorkInfo.State.CANCELLED,
+        -> FolderSyncStage.FAILED
+        WorkInfo.State.RUNNING -> FolderSyncStage.DOWNLOADING
+        else -> FolderSyncStage.QUEUED
+    }
+    return FolderSyncUiState(
+        workId = id,
+        folderId = folderId,
+        folderName = folderName,
+        displayPath = displayPath,
+        stage = stage,
+        scannedFolders = data.getInt(FolderSyncProgressKeys.SCANNED_FOLDERS, 0),
+        totalFiles = data.getInt(FolderSyncProgressKeys.TOTAL_FILES, 0),
+        completedFiles = data.getInt(FolderSyncProgressKeys.COMPLETED_FILES, 0),
+        failedFiles = data.getInt(FolderSyncProgressKeys.FAILED_FILES, 0),
+        totalBytes = data.getLong(FolderSyncProgressKeys.TOTAL_BYTES, 0L),
+        completedBytes = data.getLong(FolderSyncProgressKeys.COMPLETED_BYTES, 0L),
+        currentFile = data.getString(FolderSyncProgressKeys.CURRENT_FILE).orEmpty(),
+        error = when {
+            state == WorkInfo.State.CANCELLED -> "同步已取消"
+            else -> data.getString(FolderSyncProgressKeys.ERROR)
+        },
+    )
+}
 
 private const val PCS_MAX_ATTEMPTS = 30
 private const val PCS_POLL_INTERVAL_MS = 10_000L

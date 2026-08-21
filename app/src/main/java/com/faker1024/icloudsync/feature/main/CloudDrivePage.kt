@@ -1,7 +1,11 @@
 package com.faker1024.icloudsync.feature.main
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,10 +19,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.items as listItems
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -28,29 +37,49 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.faker1024.icloudsync.core.icloud.ICloudDriveItem
 import com.faker1024.icloudsync.core.icloud.TrustedPhone
+import com.faker1024.icloudsync.core.icloud.isPreviewableImage
+import com.faker1024.icloudsync.core.settings.CloudBrowserLayout
+import com.faker1024.icloudsync.core.settings.MAX_ICON_SIZE
+import com.faker1024.icloudsync.core.settings.MIN_ICON_SIZE
+import com.faker1024.icloudsync.core.sync.FolderSyncStage
+import kotlinx.coroutines.CancellationException
+import kotlin.math.roundToInt
 
 @Composable
 fun CloudDrivePage(
     viewModel: CloudDriveViewModel,
     modifier: Modifier = Modifier,
     onMessage: (String) -> Unit,
+    onSyncFolder: (ICloudDriveItem) -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     LaunchedEffect(viewModel) { viewModel.events.collect(onMessage) }
@@ -84,6 +113,11 @@ fun CloudDrivePage(
                 onRefresh = viewModel::refresh,
                 onOpen = viewModel::openFolder,
                 onDownload = viewModel::download,
+                onSyncFolder = onSyncFolder,
+                onCancelSync = viewModel::cancelFolderSync,
+                onSetLayout = viewModel::setLayout,
+                onSetIconSize = viewModel::setIconSize,
+                loadPreview = viewModel::loadImagePreview,
                 onLogout = viewModel::logout,
                 onClearError = viewModel::clearError,
             )
@@ -277,9 +311,80 @@ private fun BrowserPage(
     onRefresh: () -> Unit,
     onOpen: (ICloudDriveItem) -> Unit,
     onDownload: (ICloudDriveItem) -> Unit,
+    onSyncFolder: (ICloudDriveItem) -> Unit,
+    onCancelSync: () -> Unit,
+    onSetLayout: (CloudBrowserLayout) -> Unit,
+    onSetIconSize: (Float) -> Unit,
+    loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
     onLogout: () -> Unit,
     onClearError: () -> Unit,
 ) {
+    var pendingSyncFolder by remember { mutableStateOf<ICloudDriveItem?>(null) }
+    var previewItem by remember { mutableStateOf<ICloudDriveItem?>(null) }
+    var showIconSizeDialog by rememberSaveable { mutableStateOf(false) }
+    var pendingIconSize by rememberSaveable { mutableFloatStateOf(state.iconSize) }
+
+    pendingSyncFolder?.let { folder ->
+        val relative = state.path.drop(1).map { it.name } + folder.name
+        val destination = "Download/iCloud Drive/${relative.joinToString("/")}/"
+        AlertDialog(
+            onDismissRequest = { pendingSyncFolder = null },
+            title = { Text("同步“${folder.name}”到本地？") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("将递归下载文件夹内的全部文件，并保留云端目录层级。")
+                    Text(destination, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "文件会先完整写入并校验字节数，再对系统可见；失败项会自动重试，已校验文件不会重复写入。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onSyncFolder(folder)
+                    pendingSyncFolder = null
+                }) { Text("开始同步") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingSyncFolder = null }) { Text("取消") }
+            },
+        )
+    }
+    if (showIconSizeDialog) {
+        AlertDialog(
+            onDismissRequest = { showIconSizeDialog = false },
+            title = { Text("调整图标和缩略图大小") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("${pendingIconSize.roundToInt()} dp")
+                    Slider(
+                        value = pendingIconSize,
+                        onValueChange = { pendingIconSize = it },
+                        valueRange = MIN_ICON_SIZE..MAX_ICON_SIZE,
+                        steps = 3,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onSetIconSize(pendingIconSize)
+                    showIconSizeDialog = false
+                }) { Text("应用") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showIconSizeDialog = false }) { Text("取消") }
+            },
+        )
+    }
+    previewItem?.let { item ->
+        ImagePreviewDialog(
+            item = item,
+            loadPreview = loadPreview,
+            onDismiss = { previewItem = null },
+        )
+    }
+
     Column(Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
@@ -305,54 +410,128 @@ private fun BrowserPage(
             }
         }
         Text(
-            "下载位置：Download/iCloud Drive/",
+            "下载位置：Download/iCloud Drive/ · 文件夹同步会保留目录层级",
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "${state.items.size} 项",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
+                onClick = {
+                    onSetLayout(
+                        if (state.layout == CloudBrowserLayout.LIST) CloudBrowserLayout.GRID
+                        else CloudBrowserLayout.LIST,
+                    )
+                },
+            ) {
+                Text(if (state.layout == CloudBrowserLayout.LIST) "▦ 网格" else "☷ 列表")
+            }
+            OutlinedButton(onClick = {
+                pendingIconSize = state.iconSize
+                showIconSizeDialog = true
+            }) { Text("大小") }
+        }
+        state.folderSync?.let { sync ->
+            FolderSyncStatusCard(sync = sync, onCancel = onCancelSync)
+        }
         if (state.isBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
         state.error?.let { ErrorCard(it, onClearError, Modifier.padding(horizontal = 12.dp)) }
         if (state.items.isEmpty() && !state.isBusy) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("这个文件夹是空的") }
         } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(state.items, key = ICloudDriveItem::id) { item ->
-                    DriveItemRow(
-                        item = item,
-                        downloading = item.id in state.downloadingIds,
-                        onOpen = { onOpen(item) },
-                        onDownload = { onDownload(item) },
-                    )
+            if (state.layout == CloudBrowserLayout.LIST) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listItems(state.items, key = ICloudDriveItem::id) { item ->
+                        DriveItemRow(
+                            item = item,
+                            iconSize = state.iconSize,
+                            downloading = item.id in state.downloadingIds,
+                            syncing = state.folderSync?.let { it.folderId == item.id && it.isActive } == true,
+                            onOpen = { onOpen(item) },
+                            onPreview = { previewItem = item },
+                            onLongPressFolder = { pendingSyncFolder = item },
+                            onDownload = { onDownload(item) },
+                            loadPreview = loadPreview,
+                        )
+                    }
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive((state.iconSize + 72f).dp),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    gridItems(state.items, key = ICloudDriveItem::id) { item ->
+                        DriveItemGridCell(
+                            item = item,
+                            iconSize = state.iconSize,
+                            downloading = item.id in state.downloadingIds,
+                            syncing = state.folderSync?.let { it.folderId == item.id && it.isActive } == true,
+                            onOpen = { onOpen(item) },
+                            onPreview = { previewItem = item },
+                            onLongPressFolder = { pendingSyncFolder = item },
+                            onDownload = { onDownload(item) },
+                            loadPreview = loadPreview,
+                        )
+                    }
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DriveItemRow(
     item: ICloudDriveItem,
+    iconSize: Float,
     downloading: Boolean,
+    syncing: Boolean,
     onOpen: () -> Unit,
+    onPreview: () -> Unit,
+    onLongPressFolder: () -> Unit,
     onDownload: () -> Unit,
+    loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
 ) {
+    val canPreview = !item.isFolder && isPreviewableImage(item.name)
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(enabled = item.isFolder, onClick = onOpen),
+        modifier = Modifier.fillMaxWidth().combinedClickable(
+            enabled = item.isFolder || canPreview,
+            onClick = { if (item.isFolder) onOpen() else onPreview() },
+            onLongClick = { if (item.isFolder) onLongPressFolder() },
+            onLongClickLabel = if (item.isFolder) "同步此文件夹到本地" else null,
+        ),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(if (item.isFolder) "📁" else fileSymbol(item.name), style = MaterialTheme.typography.titleLarge)
+            DriveItemVisual(item, iconSize, loadPreview)
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 Text(item.name, fontWeight = FontWeight.Medium, maxLines = 2)
                 Text(
-                    if (item.isFolder) "${item.childCount} 项" else fileDetails(item),
+                    if (item.isFolder) {
+                        "${item.childCount} 项${if (syncing) " · 正在同步" else " · 长按同步"}"
+                    } else {
+                        fileDetails(item)
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -366,6 +545,241 @@ private fun DriveItemRow(
             }
         }
     }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun DriveItemGridCell(
+    item: ICloudDriveItem,
+    iconSize: Float,
+    downloading: Boolean,
+    syncing: Boolean,
+    onOpen: () -> Unit,
+    onPreview: () -> Unit,
+    onLongPressFolder: () -> Unit,
+    onDownload: () -> Unit,
+    loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
+) {
+    val canPreview = !item.isFolder && isPreviewableImage(item.name)
+    Card(
+        modifier = Modifier.fillMaxWidth().combinedClickable(
+            enabled = item.isFolder || canPreview,
+            onClick = { if (item.isFolder) onOpen() else onPreview() },
+            onLongClick = { if (item.isFolder) onLongPressFolder() },
+            onLongClickLabel = if (item.isFolder) "同步此文件夹到本地" else null,
+        ),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            DriveItemVisual(item, iconSize, loadPreview)
+            Text(item.name, fontWeight = FontWeight.Medium, maxLines = 2)
+            Text(
+                if (item.isFolder) {
+                    "${item.childCount} 项${if (syncing) " · 同步中" else ""}"
+                } else {
+                    fileDetails(item)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+            if (!item.isFolder) {
+                TextButton(onClick = onDownload, enabled = !downloading) {
+                    Text(if (downloading) "准备中" else "下载")
+                }
+            } else {
+                Text(
+                    "长按同步",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DriveItemVisual(
+    item: ICloudDriveItem,
+    iconSize: Float,
+    loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
+) {
+    val rounded = RoundedCornerShape((iconSize / 7f).dp)
+    Box(
+        modifier = Modifier
+            .size(iconSize.dp)
+            .clip(rounded)
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (!item.isFolder && isPreviewableImage(item.name)) {
+            RemoteImage(
+                item = item,
+                targetPixels = (iconSize * 3f).roundToInt(),
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+                loadPreview = loadPreview,
+                fallback = {
+                    Text("🖼", fontSize = (iconSize * 0.48f).sp)
+                },
+            )
+        } else {
+            Text(
+                if (item.isFolder) "📁" else fileSymbol(item.name),
+                fontSize = (iconSize * 0.48f).sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FolderSyncStatusCard(sync: FolderSyncUiState, onCancel: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${sync.folderName} · ${syncStageText(sync.stage)}",
+                    modifier = Modifier.weight(1f),
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (sync.isActive) TextButton(onClick = onCancel) { Text("取消") }
+            }
+            if (sync.isActive) {
+                if (sync.totalFiles > 0) {
+                    LinearProgressIndicator(
+                        progress = { (sync.completedFiles.toFloat() / sync.totalFiles).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+            }
+            val countText = when (sync.stage) {
+                FolderSyncStage.SCANNING -> "已扫描 ${sync.scannedFolders} 个文件夹，发现 ${sync.totalFiles} 个文件"
+                FolderSyncStage.QUEUED -> "等待网络和后台执行条件"
+                else -> "已完成 ${sync.completedFiles}/${sync.totalFiles} 个文件" +
+                    if (sync.failedFiles > 0) " · 暂时失败 ${sync.failedFiles}" else ""
+            }
+            Text(countText, style = MaterialTheme.typography.bodySmall)
+            if (sync.currentFile.isNotBlank()) {
+                Text(sync.currentFile, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+            }
+            sync.error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+            Text(
+                sync.displayPath,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 2,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ImagePreviewDialog(
+    item: ICloudDriveItem,
+    loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
+    onDismiss: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        item.name,
+                        modifier = Modifier.weight(1f),
+                        color = Color.White,
+                        maxLines = 2,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    TextButton(onClick = onDismiss) { Text("关闭", color = Color.White) }
+                }
+                RemoteImage(
+                    item = item,
+                    targetPixels = 2560,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    loadPreview = loadPreview,
+                    fallback = {
+                        Text("图片加载失败，可返回后重试", color = Color.White)
+                    },
+                )
+                Text(
+                    fileDetails(item),
+                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(16.dp),
+                    color = Color.LightGray,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RemoteImage(
+    item: ICloudDriveItem,
+    targetPixels: Int,
+    contentScale: ContentScale,
+    modifier: Modifier,
+    loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
+    fallback: @Composable () -> Unit,
+) {
+    val loadState by produceState<RemoteImageState>(
+        initialValue = RemoteImageState.Loading,
+        key1 = item.id,
+        key2 = item.modifiedAt,
+        key3 = targetPixels,
+    ) {
+        value = try {
+            RemoteImageState.Ready(loadPreview(item, targetPixels))
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Throwable) {
+            RemoteImageState.Failed
+        }
+    }
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        when (val current = loadState) {
+            RemoteImageState.Loading -> CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+            RemoteImageState.Failed -> fallback()
+            is RemoteImageState.Ready -> Image(
+                bitmap = current.bitmap.asImageBitmap(),
+                contentDescription = item.name,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = contentScale,
+            )
+        }
+    }
+}
+
+private sealed interface RemoteImageState {
+    data object Loading : RemoteImageState
+    data object Failed : RemoteImageState
+    data class Ready(val bitmap: android.graphics.Bitmap) : RemoteImageState
+}
+
+private fun syncStageText(stage: FolderSyncStage): String = when (stage) {
+    FolderSyncStage.QUEUED -> "等待同步"
+    FolderSyncStage.SCANNING -> "扫描目录"
+    FolderSyncStage.DOWNLOADING -> "下载并校验"
+    FolderSyncStage.RETRYING -> "等待自动重试"
+    FolderSyncStage.COMPLETE -> "同步完成"
+    FolderSyncStage.FAILED -> "同步未完成"
 }
 
 @Composable

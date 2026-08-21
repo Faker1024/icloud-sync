@@ -2,7 +2,7 @@
 
 > 文档状态：原生 UI / 私有 Web 接口 MVP<br>
 > 最后更新：2026-08-21<br>
-> 当前版本：0.4.0
+> 当前版本：0.5.0
 
 ## 1. 产品定义
 
@@ -15,13 +15,15 @@
 - 仅连接 iCloud 中国区身份、Setup、Drive 和 Document 服务。
 - 通过原生表单完成 Apple 账户登录和双重认证。
 - 查看整个 iCloud Drive 文件夹树及任意文件类型。
-- 用户主动下载文件到 `Download/iCloud Drive/`。
+- 显示图片缩略图并在 App 内打开图片预览。
+- 提供可持久化的列表/网格布局和图标尺寸设置。
+- 用户主动下载单个文件，或长按文件夹递归同步到 `Download/iCloud Drive/`。
 - 密码不落盘、不明文发送；会话令牌和 Cookie 加密保存。
 - 保留照片、视频或 ZIP 到系统相册的可选导入功能。
 
 ### 1.2 非目标
 
-- 不提供后台增量扫描、实时同步或双向同步。
+- 不提供定时增量扫描、实时同步或双向同步；后台任务只在用户主动发起后运行。
 - 不上传、改名、移动或删除云端文件。
 - 不支持多账户同时在线。
 - 不经过开发者服务器中转账户或文件数据。
@@ -38,12 +40,15 @@ flowchart LR
     C -->|否| E[accountLogin]
     D --> E
     E --> F[原生文件夹列表]
-    F --> G[获取 Document 下载地址]
-    G --> H[域名与 HTTPS 校验]
-    H --> I[Android DownloadManager]
-    I --> J[Download/iCloud Drive]
-    J --> K{用户要导入媒体}
-    K -->|是| L[SAF + WorkManager + MediaStore]
+    F --> G{用户操作}
+    G -->|点击图片| H[私有缓存 + 尺寸采样预览]
+    G -->|下载文件| I[Android DownloadManager]
+    G -->|长按文件夹| J[WorkManager 递归扫描]
+    J --> K[原子写入 + 大小校验 + 自动重试]
+    I --> L[Download/iCloud Drive]
+    K --> L
+    L --> M{用户要导入媒体}
+    M -->|是| N[SAF + WorkManager + MediaStore]
 ```
 
 1. App 启动后尝试解密本机会话；存在会话时直接读取根目录。
@@ -51,9 +56,11 @@ flowchart LR
 3. 客户端使用 SRP-6a 生成登录证明，密码不会放进 HTTP 请求体。
 4. 如果 Apple 返回双重认证挑战，显示 6 位验证码界面，并支持受信任设备推送和短信。
 5. 登录完成后取得 `drivews` 和 `docws` 服务地址，读取根目录。
-6. 点击文件夹时读取子项；点击文件时取得短期下载地址。
-7. 下载地址通过 HTTPS 和 Apple 域名白名单检查后交给系统下载服务。
-8. 通用文件保留在 Downloads；媒体只有在用户主动选择后才写入 DCIM。
+6. 点击文件夹时读取子项；图片进入视口时按需取得短期下载地址并生成采样预览。
+7. 点击图片可全屏预览；单文件下载仍交给系统下载服务。
+8. 长按文件夹时创建受网络约束的 WorkManager 前台任务，递归扫描并镜像文件层级。
+9. 所有下载和跳转地址都通过 HTTPS 与 Apple 域名白名单检查。
+10. 通用文件保留在 Downloads；媒体只有在用户主动选择后才写入 DCIM。
 
 ## 3. 技术基线与结构
 
@@ -65,7 +72,8 @@ flowchart LR
 | JSON | Android `org.json` |
 | 认证密码学 | SRP-6a、RFC 5054 2048-bit group、SHA-256、PBKDF2-HMAC-SHA256 |
 | 会话加密 | Android Keystore AES-256-GCM |
-| 通用下载 | Android DownloadManager |
+| 通用下载 | 单文件使用 Android DownloadManager；文件夹使用 WorkManager + MediaStore |
+| 图片预览 | App 私有磁盘缓存、BitmapFactory 尺寸采样、内存 LRU |
 | 媒体导入 | SAF、WorkManager、MediaStore |
 | 本地数据 | Room、DataStore |
 | 注入 | Hilt |
@@ -82,8 +90,15 @@ core/icloud/
 ├── ICloudDriveRepository.kt  # IO 调度和下载任务
 └── ICloudModels.kt
 
+core/sync/
+├── FolderSyncCoordinator.kt # 唯一任务、网络约束、退避策略和状态观察
+└── ICloudDownloadStore.kt   # Downloads 目录层级、原子写入和完整性校验
+
+core/worker/
+└── FolderSyncWorker.kt      # 递归扫描、文件级重试、任务级恢复和通知
+
 feature/main/
-├── CloudDriveViewModel.kt    # 登录/2FA/目录/下载状态机
+├── CloudDriveViewModel.kt    # 登录/2FA/目录/下载/同步状态机
 └── CloudDrivePage.kt         # 完全原生 Compose UI
 
 core/web/
@@ -185,7 +200,28 @@ docws/ws/{zone}/download/by_id?document_id={id}
 Download/iCloud Drive/
 ```
 
-理由是云盘包含文档、归档和项目文件，不能把所有内容写入 DCIM。同名文件生成 `name (2).ext`，文件名移除路径分隔符、控制字符和保留字符，最大长度 180。
+理由是云盘包含文档、归档和项目文件，不能把所有内容写入 DCIM。单文件下载保持在根目录；文件夹同步保存到 `Download/iCloud Drive/{云端相对路径}/`。文件名移除路径分隔符、控制字符和保留字符，最大长度 180。
+
+文件夹同步写入 MediaStore Downloads 集合并使用 `IS_PENDING=1`：文件完整写入且字节数与 HTTP `Content-Length` 一致后才设置为 0；服务端未给长度时回退到 Drive 元数据大小。中断、取消或校验失败会删除 pending 行，因此半截文件不会作为完成文件出现。App 通过 MediaStore 自动维护的 `OWNER_PACKAGE_NAME` 判断自己写入的行；如果目录中已有其他来源的同名文件，生成稳定的 iCloud 后缀文件名，不覆盖用户文件。
+
+### 5.4 图片缩略图与预览
+
+支持 JPEG、PNG、GIF、WebP、HEIC/HEIF、DNG、BMP、TIFF 和 AVIF 扩展名。文件进入可见区域时才请求下载票据；原始内容临时保存在 App 私有缓存，使用 `BitmapFactory.inSampleSize` 按目标尺寸解码，并按 EXIF 方向旋转。缩略图和全屏预览共用磁盘缓存，内存采用受限 LRU；退出 iCloud 登录时清除预览缓存。
+
+图片预览失败只回退为类型图标，不阻塞目录浏览或文件下载。缓存上限为 384 MiB，超过后按最近使用时间回收到约 288 MiB。
+
+### 5.5 文件夹同步与重试
+
+长按文件夹并确认后创建以远端文件夹 ID 去重的 WorkManager 任务：
+
+1. 在网络可用约束下恢复加密 iCloud 会话。
+2. 使用队列递归枚举文件夹，按远端相对路径生成本地目录。
+3. 每个目录请求和文件保存最多即时尝试 3 次，延迟为 1、2 秒。
+4. 单个文件仍失败时继续处理其余文件，避免一个坏项阻塞整棵目录。
+5. 本轮结束后只要存在失败文件，任务返回 `Result.retry()`；WorkManager 使用 30 秒起始的指数退避，最多执行 6 轮。
+6. 重试时，已由本 App 写入且大小通过校验的文件直接跳过；所有文件都成功后才报告完整同步。
+
+任务上限为 100,000 个文件，防止异常目录响应耗尽内存。MediaStore 不能单独发布完全空的目录，因此只有包含文件的目录会在公共 Downloads 中出现。当前同步是用户发起的单向下载快照，不删除本地多余文件，也不监控之后的云端变化。
 
 ## 6. UI 状态机
 
@@ -196,9 +232,9 @@ Download/iCloud Drive/
 | `AUTHENTICATING` | 禁用输入并显示进度 |
 | `TWO_FACTOR` | 6 位验证码、设备推送、短信和取消 |
 | `PCS_APPROVAL` | ADP 说明、受信任设备批准、轮询进度、立即检查和取消 |
-| `BROWSING` | 面包屑、文件列表、刷新、下载和退出 |
+| `BROWSING` | 面包屑、列表/网格、缩略图、预览、下载、长按同步和退出 |
 
-网络调用全部在 `Dispatchers.IO`；UI 不持有 Cookie、令牌或 HTTP 响应。密码从 Composable 传给 ViewModel 后立即清空输入状态。下载中的文件 ID 单独记录，避免重复点击创建多个系统任务。
+网络调用全部在 `Dispatchers.IO`；UI 不持有 Cookie、令牌或 HTTP 响应。密码从 Composable 传给 ViewModel 后立即清空输入状态。下载中的文件 ID 单独记录，避免重复点击创建多个系统任务。布局模式和图标尺寸由 DataStore 保存；最近文件夹同步的 Work ID 被保存并重新观察，因此 App 进程重建后仍能显示任务状态。
 
 ## 7. 错误模型
 
@@ -211,6 +247,9 @@ Download/iCloud Drive/
 | 423 / `pcsRequired` | 进入 PCS 设备批准流程；缺少 Documents Cookie 时禁止访问 Drive |
 | 429 | 提示稍后重试，不自动高频重放 |
 | 5xx | 提示 iCloud 服务暂不可用 |
+| 文件传输中断/长度不匹配 | 删除未发布文件，单文件即时重试，随后由 WorkManager 退避重试 |
+| 文件夹同步部分失败 | 保留已校验文件，继续其余文件；达到重试上限才报告失败 |
+| 本地空间不足/MediaStore 拒绝写入 | 删除 pending 行并自动重试；最终失败时显示未完成状态 |
 | JSON/服务地址异常 | 拒绝使用返回值，显示兼容性错误 |
 | `domainToUse` 不匹配 | 提示必须使用中国大陆 iCloud 账户 |
 
@@ -235,7 +274,7 @@ Download/iCloud Drive/
 - Manifest 禁止明文 HTTP，App 备份关闭，会话不进入云备份。
 - 服务发现结果必须重新执行 HTTPS 和域名白名单校验。
 - OkHttp 不安装网络日志拦截器；崩溃报告不得记录请求头、请求体或响应正文。
-- 退出登录清除内存 CookieJar 和加密偏好；已下载文件不删除。
+- 退出登录清除内存 CookieJar、加密偏好和私有图片预览缓存；已下载文件不删除。
 - 不使用证书校验绕过、自签名信任或宽松 HostnameVerifier。
 - UI 明示私有接口风险、第三方身份和数据只在本机处理。
 
@@ -248,6 +287,7 @@ Download/iCloud Drive/
 - 拒绝非法 SRP B 和未知协议。
 - 下载域名精确后缀校验和相似域名绕过。
 - 文件名清理、长度和同名策略。
+- 云端图片扩展名识别、布局尺寸边界和同步目录清理。
 - 原有 ZIP 路径、媒体识别、哈希与设置测试。
 - Debug 单元测试、Lint 和 APK 构建。
 
@@ -260,7 +300,9 @@ Download/iCloud Drive/
 - 进程被杀后恢复加密会话、会话到期后重登。
 - 根目录、深层目录、空目录、中文/Emoji/超长文件名。
 - PDF、Office、ZIP、图片、视频和 iWork package 下载。
-- Wi-Fi/蜂窝网络切换、断网、空间不足和重复点击。
+- 缩略图、全屏预览、列表/网格切换和 48–144 dp 图标尺寸持久化。
+- 长按文件夹同步、深层路径保留、重复任务去重、进程被杀后恢复和取消。
+- Wi-Fi/蜂窝网络切换、断网、空间不足、传输截断、自动重试和重复点击。
 - 中国区条款未确认、iCloud Drive 未开启、ADP 批准成功/拒绝/超时和关闭网页访问。
 
 测试账户不得包含真实个人照片、联系人、位置或生产文件；凭据不得写入仓库、Gradle 属性、CI Secret 输出或截图。
@@ -270,8 +312,10 @@ Download/iCloud Drive/
 - App 中不存在 WebView，所有登录与文件 UI 都是原生 Compose。
 - 中国大陆测试账户可完成 SRP 登录、2FA 和根目录读取。
 - ADP 测试账户可在不关闭高级数据保护的情况下，通过受信任设备批准后读取根目录。
-- 可逐层浏览文件夹，并下载至少文档、压缩包、照片和视频。
-- 原始文件出现在 `Download/iCloud Drive/` 且内容哈希与云端一致。
+- 可逐层浏览文件夹，图片显示缩略图并可在 App 内预览。
+- 可切换列表/网格并调整图标大小；设置在 App 重启后保留。
+- 可下载至少文档、压缩包、照片和视频；长按文件夹可保留层级递归同步。
+- 原始文件出现在 `Download/iCloud Drive/`，每项完整写入且字节数校验通过；失败项自动重试并不会被误报为完成。
 - 密码/验证码不落盘；重启后仅通过 Keystore 加密会话恢复。
 - 非 HTTPS、白名单外域名和相似域名下载均被拒绝。
 - 退出登录后不能继续读取云盘，已下载文件保留。
@@ -290,6 +334,7 @@ Download/iCloud Drive/
 - [Android：Keystore](https://developer.android.com/privacy-and-security/keystore)
 - [Android：Storage Access Framework](https://developer.android.com/training/data-storage/shared/documents-files)
 - [Android：MediaStore](https://developer.android.com/training/data-storage/shared/media)
+- [Android：WorkManager 长时间运行的 Worker](https://developer.android.com/develop/background-work/background-tasks/persistent/how-to/long-running)
 - [rclone：iCloud Drive backend](https://github.com/rclone/rclone/tree/master/backend/iclouddrive)
 - [pyicloud：China domain endpoint implementation](https://github.com/picklepete/pyicloud)
 

@@ -2,4 +2,5 @@
     <string name="app_name">云盘文件下载助手</string>
     <string name="import_notification_channel">照片导入</string>
     <string name="import_notification_title">正在导入照片</string>
+    <string name="folder_sync_notification_channel">iCloud 文件夹同步</string>
 </resources>

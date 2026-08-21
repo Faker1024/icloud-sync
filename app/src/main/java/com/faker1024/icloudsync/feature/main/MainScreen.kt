@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.faker1024.icloudsync.BuildConfig
+import com.faker1024.icloudsync.core.icloud.ICloudDriveItem
 import com.faker1024.icloudsync.core.database.ImportBatchEntity
 import com.faker1024.icloudsync.core.database.ImportedMediaEntity
 import com.faker1024.icloudsync.domain.model.ImportBatchState
@@ -68,6 +69,7 @@ private enum class MainSection(val label: String, val symbol: String) {
 fun MainScreen(
     viewModel: MainViewModel,
     cloudDriveViewModel: CloudDriveViewModel,
+    onSyncFolder: (ICloudDriveItem) -> Unit,
     onSelectFile: () -> Unit,
 ) {
     val batches by viewModel.batches.collectAsStateWithLifecycle()
@@ -111,6 +113,7 @@ fun MainScreen(
                 onMessage = { message ->
                     scope.launch { snackbarHostState.showSnackbar(message) }
                 },
+                onSyncFolder = onSyncFolder,
             )
 
             MainSection.IMPORT -> ImportPage(
