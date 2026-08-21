@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -24,23 +26,30 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
+import androidx.compose.material.icons.automirrored.rounded.Sort
+import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.TableChart
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -56,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -66,25 +76,72 @@ import com.faker1024.icloudsync.core.local.SYNCED_FILES_PUBLIC_PATH
 import com.faker1024.icloudsync.core.local.SyncedBrowserEntry
 import com.faker1024.icloudsync.core.local.SyncedFile
 import com.faker1024.icloudsync.core.local.buildSyncedBrowserEntries
+import com.faker1024.icloudsync.core.settings.LocalBrowserLayout
+import com.faker1024.icloudsync.core.settings.LocalBrowserPreferences
+import com.faker1024.icloudsync.core.settings.LocalSortDirection
+import com.faker1024.icloudsync.core.settings.LocalSortField
 import java.text.DateFormat
 import java.util.Date
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 internal fun SyncedFilesPage(
     modifier: Modifier,
     state: SyncedFilesUiState,
+    preferences: LocalBrowserPreferences,
     onRefresh: () -> Unit,
     onOpenFile: (SyncedFile) -> Unit,
+    onSetLayout: (LocalBrowserLayout) -> Unit,
+    onSetSorting: (LocalSortField, LocalSortDirection) -> Unit,
     loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,
 ) {
     var encodedPath by rememberSaveable { mutableStateOf("") }
-    val currentPath = remember(encodedPath) { decodeLocalPath(encodedPath) }
-    val entries = remember(state.files, currentPath) {
-        buildSyncedBrowserEntries(state.files, currentPath)
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var showSortDialog by remember { mutableStateOf(false) }
+    var pendingSortField by remember(preferences.sortField) { mutableStateOf(preferences.sortField) }
+    var pendingSortDirection by remember(preferences.sortDirection) {
+        mutableStateOf(preferences.sortDirection)
     }
+    val currentPath = remember(encodedPath) { decodeLocalPath(encodedPath) }
+    val totalBytes = remember(state.files) { totalSyncedBytes(state.files) }
+    val entriesState by produceState<SyncedEntriesState>(
+        initialValue = SyncedEntriesState.Loading,
+        key1 = state.files,
+        key2 = encodedPath to searchQuery,
+        key3 = preferences,
+    ) {
+        value = SyncedEntriesState.Loading
+        value = SyncedEntriesState.Ready(
+            withContext(Dispatchers.Default) {
+                buildSyncedBrowserEntries(
+                    files = state.files,
+                    currentPath = currentPath,
+                    sortField = preferences.sortField,
+                    sortDirection = preferences.sortDirection,
+                    query = searchQuery,
+                )
+            },
+        )
+    }
+    val entries = (entriesState as? SyncedEntriesState.Ready)?.entries.orEmpty()
+    val isOrganizing = entriesState == SyncedEntriesState.Loading
     var previewFile by remember { mutableStateOf<SyncedFile?>(null) }
+    if (showSortDialog) {
+        LocalSortDialog(
+            field = pendingSortField,
+            direction = pendingSortDirection,
+            onFieldChange = { pendingSortField = it },
+            onDirectionChange = { pendingSortDirection = it },
+            onApply = {
+                onSetSorting(pendingSortField, pendingSortDirection)
+                showSortDialog = false
+            },
+            onDismiss = { showSortDialog = false },
+        )
+    }
     previewFile?.let { file ->
         SyncedImagePreviewDialog(
             file = file,
@@ -101,7 +158,10 @@ internal fun SyncedFilesPage(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (currentPath.isNotEmpty()) {
-                IconButton(onClick = { encodedPath = encodeLocalPath(currentPath.dropLast(1)) }) {
+                IconButton(onClick = {
+                    encodedPath = encodeLocalPath(currentPath.dropLast(1))
+                    searchQuery = ""
+                }) {
                     Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回上一级")
                 }
             } else {
@@ -116,7 +176,7 @@ internal fun SyncedFilesPage(
                 )
                 Text(
                     if (currentPath.isEmpty()) {
-                        "${state.files.size} 个本地文件"
+                        "${state.files.size} 个文件 · ${formatSyncedBytes(totalBytes)}"
                     } else {
                         "${entries.size} 项 · 保留云端目录层级"
                     },
@@ -135,7 +195,10 @@ internal fun SyncedFilesPage(
         ) {
             Text(
                 "iCloud Drive",
-                modifier = Modifier.clickable { encodedPath = "" },
+                modifier = Modifier.clickable {
+                    encodedPath = ""
+                    searchQuery = ""
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = if (currentPath.isEmpty()) MaterialTheme.colorScheme.onSurface
                 else MaterialTheme.colorScheme.primary,
@@ -151,6 +214,7 @@ internal fun SyncedFilesPage(
                     directory,
                     modifier = Modifier.clickable {
                         encodedPath = encodeLocalPath(currentPath.take(index + 1))
+                        searchQuery = ""
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = if (index == currentPath.lastIndex) MaterialTheme.colorScheme.onSurface
@@ -159,13 +223,64 @@ internal fun SyncedFilesPage(
                 )
             }
         }
-        Text(
-            SYNCED_FILES_PUBLIC_PATH,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it.take(MAX_SEARCH_LENGTH) },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            singleLine = true,
+            placeholder = { Text("搜索当前文件夹") },
+            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+            trailingIcon = if (searchQuery.isBlank()) null else ({
+                IconButton(onClick = { searchQuery = "" }) {
+                    Icon(Icons.Rounded.Close, contentDescription = "清除搜索")
+                }
+            }),
+            shape = MaterialTheme.shapes.medium,
         )
+        IosGroupedSurface(modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Text(
+                        "${localSortFieldLabel(preferences.sortField)}${localSortDirectionArrow(preferences.sortDirection)}",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    Text(
+                        if (searchQuery.isBlank()) SYNCED_FILES_PUBLIC_PATH else "找到 ${entries.size} 项",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+                LocalToolbarAction(
+                    icon = Icons.AutoMirrored.Rounded.Sort,
+                    label = "排序",
+                    onClick = {
+                        pendingSortField = preferences.sortField
+                        pendingSortDirection = preferences.sortDirection
+                        showSortDialog = true
+                    },
+                )
+                LocalToolbarAction(
+                    icon = if (preferences.layout == LocalBrowserLayout.GRID) {
+                        Icons.AutoMirrored.Rounded.ViewList
+                    } else {
+                        Icons.Rounded.GridView
+                    },
+                    label = if (preferences.layout == LocalBrowserLayout.GRID) "列表" else "网格",
+                    onClick = {
+                        onSetLayout(
+                            if (preferences.layout == LocalBrowserLayout.GRID) LocalBrowserLayout.LIST
+                            else LocalBrowserLayout.GRID,
+                        )
+                    },
+                )
+            }
+        }
         if (state.isLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (isOrganizing && !state.isLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
         state.error?.let { message ->
             IosGroupedSurface(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
                 Row(
@@ -189,32 +304,63 @@ internal fun SyncedFilesPage(
                     )
                 }
             }
+            isOrganizing -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            }
             entries.isEmpty() && !state.isLoading && state.error == null -> {
                 Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
                     IosHero(
-                        title = "文件夹为空",
-                        message = "文件可能已在系统文件管理器中被移动或删除，请刷新后重试。",
-                        icon = Icons.Rounded.Folder,
+                        title = if (searchQuery.isBlank()) "文件夹为空" else "没有找到文件",
+                        message = if (searchQuery.isBlank()) {
+                            "文件可能已在系统文件管理器中被移动或删除，请刷新后重试。"
+                        } else {
+                            "当前文件夹中没有名称包含“$searchQuery”的项目。"
+                        },
+                        icon = if (searchQuery.isBlank()) Icons.Rounded.Folder else Icons.Rounded.Search,
                     )
                 }
             }
             else -> {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(150.dp),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    items(entries, key = SyncedBrowserEntry::key) { entry ->
-                        SyncedEntryCard(
-                            entry = entry,
-                            onOpenFolder = { folder -> encodedPath = encodeLocalPath(folder.path) },
-                            onOpenFile = { file ->
-                                if (file.isImage) previewFile = file else onOpenFile(file)
-                            },
-                            loadImage = loadImage,
-                        )
+                val openFolder: (SyncedBrowserEntry.Folder) -> Unit = { folder ->
+                    encodedPath = encodeLocalPath(folder.path)
+                    searchQuery = ""
+                }
+                val openFile: (SyncedFile) -> Unit = { file ->
+                    if (file.isImage) previewFile = file else onOpenFile(file)
+                }
+                if (preferences.layout == LocalBrowserLayout.GRID) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(150.dp),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(entries, key = SyncedBrowserEntry::key) { entry ->
+                            SyncedEntryCard(
+                                entry = entry,
+                                onOpenFolder = openFolder,
+                                onOpenFile = openFile,
+                                loadImage = loadImage,
+                            )
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        listItems(entries, key = SyncedBrowserEntry::key) { entry ->
+                            SyncedEntryListRow(
+                                entry = entry,
+                                onOpenFolder = openFolder,
+                                onOpenFile = openFile,
+                                loadImage = loadImage,
+                            )
+                        }
                     }
                 }
             }
@@ -240,8 +386,15 @@ private fun SyncedEntryCard(
             verticalArrangement = Arrangement.spacedBy(7.dp),
         ) {
             when (entry) {
-                is SyncedBrowserEntry.Folder -> SyncedFolderVisual(entry)
-                is SyncedBrowserEntry.File -> SyncedFileVisual(entry.item, loadImage)
+                is SyncedBrowserEntry.Folder -> SyncedFolderVisual(
+                    entry,
+                    Modifier.fillMaxWidth().height(112.dp),
+                )
+                is SyncedBrowserEntry.File -> SyncedFileVisual(
+                    file = entry.item,
+                    loadImage = loadImage,
+                    modifier = Modifier.fillMaxWidth().height(112.dp),
+                )
             }
             Text(
                 when (entry) {
@@ -255,7 +408,7 @@ private fun SyncedEntryCard(
             )
             Text(
                 when (entry) {
-                    is SyncedBrowserEntry.Folder -> "${entry.descendantFileCount} 个文件"
+                    is SyncedBrowserEntry.Folder -> localFolderDetails(entry)
                     is SyncedBrowserEntry.File -> localFileDetails(entry.item)
                 },
                 modifier = Modifier.fillMaxWidth(),
@@ -268,9 +421,67 @@ private fun SyncedEntryCard(
 }
 
 @Composable
-private fun SyncedFolderVisual(folder: SyncedBrowserEntry.Folder) {
+private fun SyncedEntryListRow(
+    entry: SyncedBrowserEntry,
+    onOpenFolder: (SyncedBrowserEntry.Folder) -> Unit,
+    onOpenFile: (SyncedFile) -> Unit,
+    loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,
+) {
+    val onClick = when (entry) {
+        is SyncedBrowserEntry.Folder -> ({ onOpenFolder(entry) })
+        is SyncedBrowserEntry.File -> ({ onOpenFile(entry.item) })
+    }
+    IosGroupedSurface(modifier = Modifier.clickable(onClick = onClick)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            when (entry) {
+                is SyncedBrowserEntry.Folder -> SyncedFolderVisual(entry, Modifier.size(62.dp))
+                is SyncedBrowserEntry.File -> SyncedFileVisual(
+                    file = entry.item,
+                    loadImage = loadImage,
+                    modifier = Modifier.size(62.dp),
+                    targetPixels = 360,
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    when (entry) {
+                        is SyncedBrowserEntry.Folder -> entry.name
+                        is SyncedBrowserEntry.File -> entry.item.displayName
+                    },
+                    maxLines = 2,
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    when (entry) {
+                        is SyncedBrowserEntry.Folder -> localFolderDetails(entry)
+                        is SyncedBrowserEntry.File -> localFileDetails(entry.item)
+                    },
+                    maxLines = 1,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                Icons.Rounded.ChevronRight,
+                contentDescription = if (entry is SyncedBrowserEntry.Folder) "打开文件夹" else "打开文件",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SyncedFolderVisual(
+    folder: SyncedBrowserEntry.Folder,
+    modifier: Modifier,
+) {
     Box(
-        modifier = Modifier.fillMaxWidth().height(112.dp)
+        modifier = modifier
             .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.primaryContainer),
         contentAlignment = Alignment.Center,
@@ -288,9 +499,11 @@ private fun SyncedFolderVisual(folder: SyncedBrowserEntry.Folder) {
 private fun SyncedFileVisual(
     file: SyncedFile,
     loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,
+    modifier: Modifier,
+    targetPixels: Int = 640,
 ) {
     Box(
-        modifier = Modifier.fillMaxWidth().height(112.dp)
+        modifier = modifier
             .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
@@ -298,7 +511,7 @@ private fun SyncedFileVisual(
         if (file.isImage) {
             SyncedBitmapImage(
                 file = file,
-                targetPixels = 640,
+                targetPixels = targetPixels,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
                 loadImage = loadImage,
@@ -427,6 +640,89 @@ private sealed interface SyncedImageState {
     data class Ready(val bitmap: android.graphics.Bitmap) : SyncedImageState
 }
 
+private sealed interface SyncedEntriesState {
+    data object Loading : SyncedEntriesState
+    data class Ready(val entries: List<SyncedBrowserEntry>) : SyncedEntriesState
+}
+
+@Composable
+private fun LocalSortDialog(
+    field: LocalSortField,
+    direction: LocalSortDirection,
+    onFieldChange: (LocalSortField) -> Unit,
+    onDirectionChange: (LocalSortDirection) -> Unit,
+    onApply: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("本地文件排序") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                LocalSortField.entries.forEach { option ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { onFieldChange(option) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = field == option,
+                            onClick = { onFieldChange(option) },
+                        )
+                        Text(localSortFieldLabel(option))
+                    }
+                }
+                Text(
+                    "排序方向",
+                    modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 2.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                LocalSortDirection.entries.forEach { option ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { onDirectionChange(option) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = direction == option,
+                            onClick = { onDirectionChange(option) },
+                        )
+                        Text(if (option == LocalSortDirection.ASCENDING) "升序" else "降序")
+                    }
+                }
+                Text(
+                    "文件夹始终显示在文件前面；文件夹大小为其全部子文件总和。",
+                    modifier = Modifier.padding(start = 12.dp, top = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onApply) { Text("应用") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun LocalToolbarAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = label,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(21.dp),
+        )
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
 private fun syncedFileIcon(file: SyncedFile) = when {
     file.mimeType?.startsWith("video/") == true -> Icons.Rounded.Movie
     file.mimeType == "application/pdf" || file.displayName.endsWith(".pdf", true) -> Icons.Rounded.PictureAsPdf
@@ -451,6 +747,27 @@ private fun localFileDetails(file: SyncedFile): String {
     return listOfNotNull(formatSyncedBytes(file.size), date).joinToString(" · ")
 }
 
+private fun localFolderDetails(folder: SyncedBrowserEntry.Folder): String {
+    val date = folder.modifiedAtMillis.takeIf { it > 0L }?.let {
+        DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(it))
+    }
+    return listOfNotNull(
+        "${folder.descendantFileCount} 个文件",
+        formatSyncedBytes(folder.totalBytes),
+        date,
+    ).joinToString(" · ")
+}
+
+private fun localSortFieldLabel(field: LocalSortField): String = when (field) {
+    LocalSortField.NAME -> "名称"
+    LocalSortField.MODIFIED_TIME -> "修改时间"
+    LocalSortField.SIZE -> "大小"
+    LocalSortField.FILE_TYPE -> "文件类型"
+}
+
+private fun localSortDirectionArrow(direction: LocalSortDirection): String =
+    if (direction == LocalSortDirection.ASCENDING) " ↑" else " ↓"
+
 private fun formatSyncedBytes(bytes: Long): String {
     if (bytes < 1024) return "$bytes B"
     val units = arrayOf("KB", "MB", "GB", "TB")
@@ -464,12 +781,17 @@ private fun formatSyncedBytes(bytes: Long): String {
     return "$rounded ${units[index]}"
 }
 
+private fun totalSyncedBytes(files: List<SyncedFile>): Long = files.fold(0L) { total, file ->
+    if (Long.MAX_VALUE - total < file.size) Long.MAX_VALUE else total + file.size
+}
+
 private fun encodeLocalPath(path: List<String>): String = path.joinToString(LOCAL_PATH_SEPARATOR)
 
 private fun decodeLocalPath(value: String): List<String> =
     value.takeIf(String::isNotBlank)?.split(LOCAL_PATH_SEPARATOR) ?: emptyList()
 
 private const val LOCAL_PATH_SEPARATOR = "\u001F"
+private const val MAX_SEARCH_LENGTH = 80
 private val ARCHIVE_EXTENSIONS = setOf("zip", "rar", "7z", "tar", "gz", "bz2")
 private val TABLE_EXTENSIONS = setOf("xls", "xlsx", "csv", "numbers")
 private val DOCUMENT_EXTENSIONS = setOf("doc", "docx", "txt", "rtf", "pages", "md")

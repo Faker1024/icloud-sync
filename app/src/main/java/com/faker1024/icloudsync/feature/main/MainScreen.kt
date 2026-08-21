@@ -92,6 +92,7 @@ fun MainScreen(
     val selectedBatchId by viewModel.selectedBatchId.collectAsStateWithLifecycle()
     val selectedBatchItems by viewModel.selectedBatchItems.collectAsStateWithLifecycle()
     val syncedFiles by viewModel.syncedFiles.collectAsStateWithLifecycle()
+    val localBrowserPreferences by viewModel.localBrowserPreferences.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var section by rememberSaveable { mutableStateOf(MainSection.CLOUD_DRIVE) }
@@ -172,8 +173,11 @@ fun MainScreen(
             MainSection.LOCAL_FILES -> SyncedFilesPage(
                 modifier = Modifier.padding(padding),
                 state = syncedFiles,
+                preferences = localBrowserPreferences,
                 onRefresh = viewModel::refreshSyncedFiles,
                 onOpenFile = viewModel::openSyncedFile,
+                onSetLayout = viewModel::setLocalBrowserLayout,
+                onSetSorting = viewModel::setLocalSorting,
                 loadImage = viewModel::loadSyncedImage,
             )
 
@@ -492,7 +496,7 @@ private fun SettingsPage(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text("iCloud Drive 下载", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "原始文件保存在 Download/iCloud Drive/，文件夹同步会保留云端层级，并可在“本地”标签页直接查看。",
+                        "原始文件保存在 Download/iCloud Drive/，文件夹同步会保留云端层级；可在“本地”标签页查看、搜索和排序。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

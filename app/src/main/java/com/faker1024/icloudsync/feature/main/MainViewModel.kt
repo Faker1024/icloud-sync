@@ -10,6 +10,11 @@ import com.faker1024.icloudsync.core.importer.ImportRepository
 import com.faker1024.icloudsync.core.local.SyncedFile
 import com.faker1024.icloudsync.core.local.SyncedFileRepository
 import com.faker1024.icloudsync.core.settings.ImportSettings
+import com.faker1024.icloudsync.core.settings.LocalBrowserLayout
+import com.faker1024.icloudsync.core.settings.LocalBrowserPreferences
+import com.faker1024.icloudsync.core.settings.LocalBrowserSettings
+import com.faker1024.icloudsync.core.settings.LocalSortDirection
+import com.faker1024.icloudsync.core.settings.LocalSortField
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.channels.Channel
@@ -30,6 +35,7 @@ class MainViewModel @Inject constructor(
     private val repository: ImportRepository,
     private val settings: ImportSettings,
     private val syncedFileRepository: SyncedFileRepository,
+    private val localBrowserSettings: LocalBrowserSettings,
 ) : ViewModel() {
     val batches: StateFlow<List<ImportBatchEntity>> = repository.observeRecentBatches()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -39,6 +45,13 @@ class MainViewModel @Inject constructor(
             viewModelScope,
             SharingStarted.WhileSubscribed(5_000),
             ImportSettings.DEFAULT_ALBUM_NAME,
+        )
+
+    val localBrowserPreferences: StateFlow<LocalBrowserPreferences> = localBrowserSettings.preferences
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            LocalBrowserPreferences(),
         )
 
     val selectedBatchId = MutableStateFlow<String?>(null)
@@ -123,6 +136,14 @@ class MainViewModel @Inject constructor(
                     eventChannel.send(MainEvent.Message("没有可打开此文件的应用，或文件已被移除"))
                 }
             }
+    }
+
+    fun setLocalBrowserLayout(layout: LocalBrowserLayout) {
+        viewModelScope.launch { localBrowserSettings.setLayout(layout) }
+    }
+
+    fun setLocalSorting(field: LocalSortField, direction: LocalSortDirection) {
+        viewModelScope.launch { localBrowserSettings.setSorting(field, direction) }
     }
 }
 
