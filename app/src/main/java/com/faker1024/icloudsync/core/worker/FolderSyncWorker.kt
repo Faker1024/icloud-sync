@@ -195,7 +195,7 @@ class FolderSyncWorker @AssistedInject constructor(
                 )
                 return@coroutineScope Result.retry()
             }
-            val message = "仍有 $failedFileCount 个文件未能下载：${failures.take(3).joinToString("、")}"
+            val message = "仍有 $failedFileCount 个文件未能同步：${failures.take(3).joinToString("、")}"
             return@coroutineScope fail(
                 message,
                 rootFolderName,
@@ -212,7 +212,7 @@ class FolderSyncWorker @AssistedInject constructor(
             totalBytes = totalBytes,
             completedBytes = completedByteCount,
         )
-        notifyFinished(rootFolderName, completedFileCount, success = true, message = "所有文件均已校验并保存")
+        notifyFinished(rootFolderName, completedFileCount, success = true, message = "所有文件均已校验，iCloud 日期已记录")
         Result.success(successData(completedFileCount, completedByteCount))
     }
 

@@ -9,6 +9,8 @@ import android.graphics.ImageDecoder
 import android.provider.MediaStore
 import android.util.LruCache
 import androidx.core.net.toUri
+import com.faker1024.icloudsync.core.database.SyncedFileMetadataDao
+import com.faker1024.icloudsync.core.database.SyncedFileMetadataEntity
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,6 +22,7 @@ import kotlinx.coroutines.withContext
 @Singleton
 class SyncedFileRepository @Inject constructor(
     @param:ApplicationContext private val context: Context,
+    private val metadataDao: SyncedFileMetadataDao,
 ) {
     private val bitmapCache = object : LruCache<String, Bitmap>(BITMAP_CACHE_BYTES) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
@@ -27,6 +30,7 @@ class SyncedFileRepository @Inject constructor(
 
     suspend fun listFiles(): List<SyncedFile> = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
+        val metadataByUri = metadataDao.listAll().associateBy(SyncedFileMetadataEntity::contentUri)
         val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
         val projection = arrayOf(
             MediaStore.MediaColumns._ID,
@@ -58,15 +62,27 @@ class SyncedFileRepository @Inject constructor(
                     val relativePath = cursor.getString(pathIndex) ?: continue
                     val directories = parseSyncedDirectories(relativePath) ?: continue
                     val id = cursor.getLong(idIndex)
+                    val contentUri = ContentUris.withAppendedId(collection, id).toString()
+                    val displayName = cursor.getString(nameIndex)?.takeIf(String::isNotBlank)
+                        ?: "未命名文件"
+                    val size = cursor.getLong(sizeIndex).coerceAtLeast(0L)
+                    val indexedModifiedAtMillis =
+                        cursor.getLong(modifiedIndex).coerceAtLeast(0L) * MILLIS_PER_SECOND
                     add(
                         SyncedFile(
                             id = id,
-                            contentUri = ContentUris.withAppendedId(collection, id).toString(),
-                            displayName = cursor.getString(nameIndex)?.takeIf(String::isNotBlank)
-                                ?: "未命名文件",
+                            contentUri = contentUri,
+                            displayName = displayName,
                             mimeType = cursor.getString(mimeIndex),
-                            size = cursor.getLong(sizeIndex).coerceAtLeast(0L),
-                            modifiedAtMillis = cursor.getLong(modifiedIndex).coerceAtLeast(0L) * 1_000L,
+                            size = size,
+                            modifiedAtMillis = resolveSyncedModifiedAtMillis(
+                                indexedModifiedAtMillis = indexedModifiedAtMillis,
+                                metadata = metadataByUri[contentUri],
+                                contentUri = contentUri,
+                                displayName = displayName,
+                                relativePath = relativePath,
+                                size = size,
+                            ),
                             directories = directories,
                         ),
                     )
@@ -131,5 +147,27 @@ class SyncedFileRepository @Inject constructor(
         private const val BITMAP_CACHE_BYTES = 64 * 1024 * 1024
         private const val MIN_IMAGE_TARGET = 96
         private const val MAX_IMAGE_TARGET = 4096
+        private const val MILLIS_PER_SECOND = 1_000L
     }
 }
+
+internal fun resolveSyncedModifiedAtMillis(
+    indexedModifiedAtMillis: Long,
+    metadata: SyncedFileMetadataEntity?,
+    contentUri: String,
+    displayName: String,
+    relativePath: String,
+    size: Long,
+): Long = metadata
+    ?.takeIf {
+        it.contentUri == contentUri &&
+            it.displayName == displayName &&
+            normalizeMetadataPath(it.relativePath) == normalizeMetadataPath(relativePath) &&
+            it.size == size &&
+            it.remoteModifiedAtMillis > 0L
+    }
+    ?.remoteModifiedAtMillis
+    ?: indexedModifiedAtMillis
+
+private fun normalizeMetadataPath(value: String): String =
+    value.replace('\\', '/').trim('/')

@@ -69,3 +69,17 @@ data class ImportedMediaEntity(
     val errorCode: String?,
     val createdAt: Long,
 )
+
+@Entity(
+    tableName = "synced_file_metadata",
+    indices = [Index("remoteItemId")],
+)
+data class SyncedFileMetadataEntity(
+    @PrimaryKey val contentUri: String,
+    val remoteItemId: String,
+    val displayName: String,
+    val relativePath: String,
+    val size: Long,
+    val remoteModifiedAtMillis: Long,
+    val updatedAt: Long,
+)

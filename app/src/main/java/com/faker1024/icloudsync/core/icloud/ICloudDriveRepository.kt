@@ -60,14 +60,12 @@ class ICloudDriveRepository @Inject internal constructor(
         item: ICloudDriveItem,
         directories: List<String>,
     ): DownloadStoreResult = withContext(Dispatchers.IO) {
-        api.openDownload(item).use { source ->
-            downloadStore.save(
-                item = item,
-                directories = directories,
-                source = source,
-                mimeType = source.mimeType ?: mimeTypeFor(item.name),
-            )
-        }
+        downloadStore.save(
+            item = item,
+            directories = directories,
+            fallbackMimeType = mimeTypeFor(item.name),
+            sourceProvider = { api.openDownload(item) },
+        )
     }
 
     fun logout() {

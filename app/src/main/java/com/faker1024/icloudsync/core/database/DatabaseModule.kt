@@ -22,4 +22,8 @@ object DatabaseModule {
 
     @Provides
     fun provideImportedMediaDao(database: AppDatabase): ImportedMediaDao = database.importedMediaDao()
+
+    @Provides
+    fun provideSyncedFileMetadataDao(database: AppDatabase): SyncedFileMetadataDao =
+        database.syncedFileMetadataDao()
 }

@@ -3,10 +3,11 @@ package com.faker1024.icloudsync.core.sync
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
-import android.media.MediaScannerConnection
 import android.net.Uri
 import android.provider.MediaStore
 import android.system.Os
+import com.faker1024.icloudsync.core.database.SyncedFileMetadataDao
+import com.faker1024.icloudsync.core.database.SyncedFileMetadataEntity
 import com.faker1024.icloudsync.core.icloud.ICloudDownloadSource
 import com.faker1024.icloudsync.core.icloud.ICloudDriveItem
 import com.faker1024.icloudsync.core.web.sanitizeCloudFileName
@@ -18,12 +19,8 @@ import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 
 data class DownloadStoreResult(
@@ -35,101 +32,126 @@ data class DownloadStoreResult(
 @Singleton
 class ICloudDownloadStore @Inject constructor(
     @param:ApplicationContext private val context: Context,
+    private val metadataDao: SyncedFileMetadataDao,
 ) {
-    private val modifiedTimeMutex = Mutex()
-
     internal suspend fun save(
         item: ICloudDriveItem,
         directories: List<String>,
-        source: ICloudDownloadSource,
-        mimeType: String,
+        fallbackMimeType: String,
+        sourceProvider: () -> ICloudDownloadSource,
     ): DownloadStoreResult = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
         val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
         val relativePath = buildDownloadRelativePath(directories)
-        val expectedSize = source.contentLength.takeIf { it >= 0L }
-            ?: item.size.takeIf { it >= 0L }
-        val displayName = resolveDisplayName(
+        val target = resolveDestination(
             requested = sanitizeCloudFileName(item.name),
             relativePath = relativePath,
             itemId = item.id,
         )
+        val displayName = target.displayName
         val remoteModifiedAtSeconds = parseCloudModifiedAtSeconds(item.modifiedAt)
-        val existing = findExisting(displayName, relativePath)
+        val existing = target.existing
+        val itemExpectedSize = item.size.takeIf { it >= 0L }
         if (existing != null && existing.isOwnedByApp && !existing.pending &&
-            expectedSize != null && existing.size == expectedSize
+            itemExpectedSize != null && existing.size == itemExpectedSize
         ) {
-            preserveRemoteModifiedTime(
+            recordMetadata(
+                item = item,
                 uri = existing.uri,
-                indexedSeconds = existing.modifiedAtSeconds,
-                remoteSeconds = remoteModifiedAtSeconds,
-                mimeType = mimeType,
+                displayName = displayName,
+                relativePath = relativePath,
+                size = existing.size,
+                remoteModifiedAtSeconds = remoteModifiedAtSeconds,
             )
+            preserveRemoteModifiedTimeBestEffort(existing.uri, remoteModifiedAtSeconds)
             return@withContext DownloadStoreResult(existing.uri, existing.size, skipped = true)
         }
-        if (existing != null && existing.isOwnedByApp) {
-            resolver.delete(existing.uri, null, null)
-        }
 
-        val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
-            put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-            put(MediaStore.MediaColumns.IS_PENDING, 1)
-        }
-        val destination = resolver.insert(collection, values)
-            ?: error("Android 无法在下载目录创建文件")
-        try {
-            val output = resolver.openOutputStream(destination, "w")
-                ?: error("Android 无法写入下载文件")
+        sourceProvider().use { source ->
+            val expectedSize = source.contentLength.takeIf { it >= 0L } ?: itemExpectedSize
+            if (existing != null && existing.isOwnedByApp && !existing.pending &&
+                expectedSize != null && existing.size == expectedSize
+            ) {
+                recordMetadata(
+                    item = item,
+                    uri = existing.uri,
+                    displayName = displayName,
+                    relativePath = relativePath,
+                    size = existing.size,
+                    remoteModifiedAtSeconds = remoteModifiedAtSeconds,
+                )
+                preserveRemoteModifiedTimeBestEffort(existing.uri, remoteModifiedAtSeconds)
+                return@withContext DownloadStoreResult(existing.uri, existing.size, skipped = true)
+            }
+            if (existing != null && existing.isOwnedByApp) {
+                resolver.delete(existing.uri, null, null)
+                deleteMetadataBestEffort(existing.uri)
+            }
+
+            val mimeType = source.mimeType ?: fallbackMimeType
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val destination = resolver.insert(collection, values)
+                ?: error("Android 无法在下载目录创建文件")
             var copied = 0L
-            output.buffered().use { stream ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                val input = source.inputStream
-                while (true) {
-                    ensureActive()
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    stream.write(buffer, 0, count)
-                    copied += count
+            try {
+                val output = resolver.openOutputStream(destination, "w")
+                    ?: error("Android 无法写入下载文件")
+                output.buffered().use { stream ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    val input = source.inputStream
+                    while (true) {
+                        ensureActive()
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        stream.write(buffer, 0, count)
+                        copied += count
+                    }
+                    stream.flush()
                 }
-                stream.flush()
+                if (expectedSize != null && copied != expectedSize) {
+                    error("文件下载不完整：预期 $expectedSize 字节，实际 $copied 字节")
+                }
+                val published = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+                check(resolver.update(destination, published, null, null) == 1) {
+                    "Android 无法发布下载文件"
+                }
+            } catch (error: Throwable) {
+                resolver.delete(destination, null, null)
+                throw error
             }
-            if (expectedSize != null && copied != expectedSize) {
-                error("文件下载不完整：预期 $expectedSize 字节，实际 $copied 字节")
-            }
-            remoteModifiedAtSeconds?.let { setFilesystemModifiedTime(destination, it) }
-            val published = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
-            check(resolver.update(destination, published, null, null) == 1) {
-                "Android 无法发布下载文件"
-            }
-            preserveRemoteModifiedTime(
+            recordMetadata(
+                item = item,
                 uri = destination,
-                indexedSeconds = readIndexedModifiedTime(destination),
-                remoteSeconds = remoteModifiedAtSeconds,
-                mimeType = mimeType,
+                displayName = displayName,
+                relativePath = relativePath,
+                size = copied,
+                remoteModifiedAtSeconds = remoteModifiedAtSeconds,
             )
+            preserveRemoteModifiedTimeBestEffort(destination, remoteModifiedAtSeconds)
             DownloadStoreResult(destination, copied, skipped = false)
-        } catch (error: Throwable) {
-            resolver.delete(destination, null, null)
-            throw error
         }
     }
 
-    private fun resolveDisplayName(
+    private fun resolveDestination(
         requested: String,
         relativePath: String,
         itemId: String,
-    ): String {
+    ): ResolvedDestination {
         val exact = findExisting(requested, relativePath)
-        if (exact == null || exact.isOwnedByApp) return requested
+        if (exact == null || exact.isOwnedByApp) return ResolvedDestination(requested, exact)
         val suffix = ownershipHash(itemId).take(12)
         val candidate = addFileNameSuffix(requested, " (iCloud-$suffix)")
         val conflict = findExisting(candidate, relativePath)
         if (conflict == null || conflict.isOwnedByApp) {
-            return candidate
+            return ResolvedDestination(candidate, conflict)
         }
-        return addFileNameSuffix(requested, " (iCloud-${ownershipHash(itemId).take(20)})")
+        val fallback = addFileNameSuffix(requested, " (iCloud-${ownershipHash(itemId).take(20)})")
+        return ResolvedDestination(fallback, findExisting(fallback, relativePath))
     }
 
     private fun findExisting(displayName: String, relativePath: String): ExistingDownload? {
@@ -139,7 +161,6 @@ class ICloudDownloadStore @Inject constructor(
             MediaStore.MediaColumns.SIZE,
             MediaStore.MediaColumns.OWNER_PACKAGE_NAME,
             MediaStore.MediaColumns.IS_PENDING,
-            MediaStore.MediaColumns.DATE_MODIFIED,
         )
         val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND " +
             "${MediaStore.MediaColumns.RELATIVE_PATH} = ?"
@@ -157,63 +178,57 @@ class ICloudDownloadStore @Inject constructor(
                 size = cursor.getLong(1),
                 isOwnedByApp = cursor.getString(2) == context.packageName,
                 pending = cursor.getInt(3) != 0,
-                modifiedAtSeconds = cursor.getLong(4).coerceAtLeast(0L),
             )
         }
     }
 
-    private suspend fun preserveRemoteModifiedTime(
+    private suspend fun recordMetadata(
+        item: ICloudDriveItem,
         uri: Uri,
-        indexedSeconds: Long,
-        remoteSeconds: Long?,
-        mimeType: String,
+        displayName: String,
+        relativePath: String,
+        size: Long,
+        remoteModifiedAtSeconds: Long?,
     ) {
-        val desiredSeconds = remoteSeconds ?: return
-        modifiedTimeMutex.lock()
-        try {
-            val resolver = context.contentResolver
-            val file = resolveFilesystemFile(uri)
-            val filesystemMatches =
-                modifiedTimeMatches(file.lastModified() / MILLIS_PER_SECOND, desiredSeconds)
-            if (!filesystemMatches) setFilesystemModifiedTime(file, desiredSeconds)
-            if (filesystemMatches && modifiedTimeMatches(indexedSeconds, desiredSeconds)) return
+        val modifiedAtSeconds = remoteModifiedAtSeconds ?: return
+        metadataDao.upsert(
+            SyncedFileMetadataEntity(
+                contentUri = uri.toString(),
+                remoteItemId = item.id,
+                displayName = displayName,
+                relativePath = relativePath,
+                size = size,
+                remoteModifiedAtMillis = modifiedAtSeconds * MILLIS_PER_SECOND,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
 
-            // Some MediaProvider versions accept this owner-only update even though the column is
-            // documented as read-only. The filesystem timestamp above remains the source of truth.
-            runCatching {
-                resolver.update(
-                    uri,
-                    ContentValues().apply { put(MediaStore.MediaColumns.DATE_MODIFIED, desiredSeconds) },
-                    null,
-                    null,
-                )
-            }
-            if (!modifiedTimeMatches(readIndexedModifiedTime(uri), desiredSeconds)) {
-                withTimeout(MEDIA_SCAN_TIMEOUT_MILLIS) {
-                    suspendCancellableCoroutine { continuation ->
-                        MediaScannerConnection.scanFile(
-                            context,
-                            arrayOf(file.absolutePath),
-                            arrayOf(mimeType),
-                        ) { _, _ ->
-                            if (continuation.isActive) continuation.resume(Unit)
-                        }
-                    }
-                }
-            }
-            check(modifiedTimeMatches(readIndexedModifiedTime(uri), desiredSeconds)) {
-                "Android 未能刷新 iCloud 文件修改时间"
-            }
-            check(modifiedTimeMatches(file.lastModified() / MILLIS_PER_SECOND, desiredSeconds)) {
-                "Android 未能保留 iCloud 文件修改时间"
-            }
-        } finally {
-            modifiedTimeMutex.unlock()
+    private suspend fun deleteMetadataBestEffort(uri: Uri) {
+        try {
+            metadataDao.delete(uri.toString())
+        } catch (_: Exception) {
+            // Stale metadata cannot affect a replacement because its content URI is different.
         }
     }
 
-    private fun setFilesystemModifiedTime(uri: Uri, desiredSeconds: Long) {
-        setFilesystemModifiedTime(resolveFilesystemFile(uri), desiredSeconds)
+    private fun preserveRemoteModifiedTimeBestEffort(uri: Uri, remoteSeconds: Long?) {
+        val desiredSeconds = remoteSeconds ?: return
+        try {
+            setFilesystemModifiedTime(resolveFilesystemFile(uri), desiredSeconds)
+        } catch (_: Exception) {
+            // Scoped storage and some vendor MediaProviders reject filesystem timestamp changes.
+        }
+        try {
+            context.contentResolver.update(
+                uri,
+                ContentValues().apply { put(MediaStore.MediaColumns.DATE_MODIFIED, desiredSeconds) },
+                null,
+                null,
+            )
+        } catch (_: Exception) {
+            // DATE_MODIFIED is a read-only index on many Android versions.
+        }
     }
 
     private fun setFilesystemModifiedTime(file: File, desiredSeconds: Long) {
@@ -233,16 +248,6 @@ class ICloudDownloadStore @Inject constructor(
         return File(path)
     }
 
-    private fun readIndexedModifiedTime(uri: Uri): Long = context.contentResolver.query(
-        uri,
-        arrayOf(MediaStore.MediaColumns.DATE_MODIFIED),
-        null,
-        null,
-        null,
-    )?.use { cursor ->
-        if (cursor.moveToFirst()) cursor.getLong(0).coerceAtLeast(0L) else 0L
-    } ?: 0L
-
     private fun ownershipHash(itemId: String): String =
         MessageDigest.getInstance("SHA-256")
             .digest(itemId.toByteArray(Charsets.UTF_8))
@@ -253,7 +258,11 @@ class ICloudDownloadStore @Inject constructor(
         val size: Long,
         val isOwnedByApp: Boolean,
         val pending: Boolean,
-        val modifiedAtSeconds: Long,
+    )
+
+    private data class ResolvedDestination(
+        val displayName: String,
+        val existing: ExistingDownload?,
     )
 }
 
@@ -312,4 +321,3 @@ private const val MILLIS_PER_SECOND = 1_000L
 private const val MILLIS_TIMESTAMP_THRESHOLD = 10_000_000_000L
 private const val MAX_FILE_TIMESTAMP_SECONDS = Long.MAX_VALUE / MILLIS_PER_SECOND
 private const val FILE_TIME_TOLERANCE_SECONDS = 2L
-private const val MEDIA_SCAN_TIMEOUT_MILLIS = 15_000L

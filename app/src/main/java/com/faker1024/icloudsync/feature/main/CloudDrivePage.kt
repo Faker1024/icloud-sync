@@ -1194,7 +1194,7 @@ private const val IMAGE_VIEWER_CONTROLS_TIMEOUT_MILLIS = 2_500L
 private fun syncStageText(stage: FolderSyncStage): String = when (stage) {
     FolderSyncStage.QUEUED -> "等待同步"
     FolderSyncStage.SCANNING -> "扫描目录"
-    FolderSyncStage.DOWNLOADING -> "下载并校验"
+    FolderSyncStage.DOWNLOADING -> "同步并校验"
     FolderSyncStage.RETRYING -> "等待自动重试"
     FolderSyncStage.COMPLETE -> "同步完成"
     FolderSyncStage.FAILED -> "同步未完成"

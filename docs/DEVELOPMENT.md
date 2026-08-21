@@ -2,7 +2,7 @@
 
 > 文档状态：原生 UI / 私有 Web 接口 MVP<br>
 > 最后更新：2026-08-22<br>
-> 当前版本：0.14.0
+> 当前版本：0.15.0
 
 ## 1. 产品定义
 
@@ -94,11 +94,14 @@ core/icloud/
 
 core/sync/
 ├── FolderSyncCoordinator.kt # 唯一任务、网络约束、退避策略和状态观察
-└── ICloudDownloadStore.kt   # Downloads 目录层级、原子写入、完整性校验和云端时间保留
+└── ICloudDownloadStore.kt   # Downloads 目录层级、原子写入、完整性校验和云端时间索引
 
 core/local/
 ├── SyncedFileModels.kt      # 本地文件、虚拟文件夹和路径边界
-└── SyncedFileRepository.kt  # MediaStore 扫描、图片解码和安全打开
+└── SyncedFileRepository.kt  # MediaStore + 云端时间合并、图片解码和安全打开
+
+core/database/
+└── SyncedFileMetadataDao.kt # content URI 对应的 iCloud 原始修改时间
 
 core/settings/
 └── LocalBrowserSettings.kt  # 本地布局与排序 DataStore 偏好
@@ -211,7 +214,7 @@ Download/iCloud Drive/
 
 理由是云盘包含文档、归档和项目文件，不能把所有内容写入 DCIM。单文件下载保持在根目录；文件夹同步保存到 `Download/iCloud Drive/{云端相对路径}/`。文件名移除路径分隔符、控制字符和保留字符，最大长度 180。
 
-文件夹同步写入 MediaStore Downloads 集合并使用 `IS_PENDING=1`：文件完整写入且字节数与 HTTP `Content-Length` 一致后才设置为 0；服务端未给长度时回退到 Drive 元数据大小。中断、取消或校验失败会删除 pending 行，因此半截文件不会作为完成文件出现。App 通过 MediaStore 自动维护的 `OWNER_PACKAGE_NAME` 判断自己写入的行；如果目录中已有其他来源的同名文件，生成稳定的 iCloud 后缀文件名，不覆盖用户文件。发布完成后解析 Drive `dateModified`，写入实际文件的 `lastModified` 并刷新 MediaStore 只读时间索引；文件系统只支持粗粒度时间时允许 2 秒误差。
+文件夹同步写入 MediaStore Downloads 集合并使用 `IS_PENDING=1`：文件完整写入且字节数与 HTTP `Content-Length` 一致后才设置为 0；服务端未给长度时回退到 Drive 元数据大小。中断、取消或校验失败会删除 pending 行，因此半截文件不会作为完成文件出现。App 通过 MediaStore 自动维护的 `OWNER_PACKAGE_NAME` 判断自己写入的行；如果目录中已有其他来源的同名文件，生成稳定的 iCloud 后缀文件名，不覆盖用户文件。发布完成后解析 Drive `dateModified` 并按 `content://` URI 写入 Room 时间索引；实际文件 `lastModified` 与 MediaStore 只读时间索引只做尽力更新，失败不会把完整文件误判为同步失败。
 
 ### 5.4 图片缩略图与预览
 
@@ -228,15 +231,15 @@ Download/iCloud Drive/
 3. 每个目录请求和文件保存最多即时尝试 3 次，延迟为 1、2 秒。
 4. 单个文件仍失败时继续处理其余文件，避免一个坏项阻塞整棵目录。
 5. 本轮结束后只要存在失败文件，任务返回 `Result.retry()`；WorkManager 使用 30 秒起始的指数退避，最多执行 6 轮。
-6. 重试时，已由本 App 写入且大小通过校验的文件不重复下载，但仍会核对并校正 iCloud 修改时间；所有文件都成功后才报告完整同步。
+6. 重试或校正旧文件时，已由本 App 写入且 Drive 元数据大小通过校验的文件不建立下载连接；记录 iCloud 原始修改时间后立即计为完成。
 
-文件传输使用固定 3 路协程工作池。工作池通过有界队列领取文件，不会为最多 100,000 个文件一次性创建同等数量的协程；每个文件仍保持单一 HTTP 流并独立执行最多 3 次即时重试。完成数、失败数和字节数使用线程安全计数器汇总，WorkManager 进度及前台通知串行发布，避免并发更新导致进度倒退。文件系统时间可并行写入，但 MediaStore 时间索引刷新使用互斥锁串行执行，避免多个媒体扫描互相干扰。
+文件传输使用固定 3 路协程工作池。工作池通过有界队列领取文件，不会为最多 100,000 个文件一次性创建同等数量的协程；每个新文件仍保持单一 HTTP 流并独立执行最多 3 次即时重试。完成数、失败数和字节数使用线程安全计数器汇总，WorkManager 进度及前台通知串行发布，避免并发更新导致进度倒退。旧文件时间校正只写 Room 索引和尝试更新系统时间，不触发媒体扫描或文件内容传输。
 
 任务上限为 100,000 个文件，防止异常目录响应耗尽内存。MediaStore 不能单独发布完全空的目录，因此只有包含文件的目录会在公共 Downloads 中出现。当前同步是用户发起的单向下载快照，不删除本地多余文件，也不监控之后的云端变化。
 
 ### 5.6 已同步文件浏览与本地图片预览
 
-“本地”标签页查询 MediaStore Downloads 中 `RELATIVE_PATH` 位于 `Download/iCloud Drive/` 的已发布条目，不申请“所有文件访问”权限，也不复制一份文件索引。查询结果按 `RELATIVE_PATH` 还原为只读虚拟目录树；用户在系统文件管理器中移动或删除文件后，刷新即可反映最新状态。
+“本地”标签页查询 MediaStore Downloads 中 `RELATIVE_PATH` 位于 `Download/iCloud Drive/` 的已发布条目，不申请“所有文件访问”权限，也不复制文件内容。查询结果按 `RELATIVE_PATH` 还原为只读虚拟目录树；Room 中路径、名称、大小和 `content://` URI 均匹配的条目可覆盖 MediaStore 显示时间，以保证 App 内日期和排序使用 iCloud 原始修改时间。用户在系统文件管理器中移动、替换或删除文件后，元数据不匹配时自动回退到 MediaStore，刷新即可反映最新状态。
 
 图片类型由 MIME 与扩展名共同识别。列表缩略图通过 `content://` URI 和 `ImageDecoder` 按目标尺寸解码，内存缓存上限 64 MiB；全屏查看器使用原始 `content://` URI 分块解码，仅保留当前可见瓦片。云端与本地查看器共享 ZoomImage 手势引擎，支持双指缩放、惯性拖动、双击分级放大、比例显示和一键复位，并使用横向 Pager 在当前排序结果的图片间左右切换。图片放大时优先平移，到达横向边缘后把手势交给 Pager。图片画布延伸到系统栏区域；顶部工具栏和底部信息作为安全区内的半透明悬浮层，图片加载完成 2.5 秒后自动隐藏，缩放时立即隐藏，单击图片可以切换显示。解码错误显示错误提示和重试入口，不影响其他文件浏览。
 
@@ -349,7 +352,7 @@ Download/iCloud Drive/
 - 可逐层浏览文件夹，图片显示缩略图并可在 App 内预览。
 - 可切换列表/网格、调整图标大小并选择名称/时间/大小/类型排序；设置在 App 重启后保留。
 - 可下载至少文档、压缩包、照片和视频；长按文件夹可保留层级递归同步。
-- 原始文件出现在 `Download/iCloud Drive/`，每项完整写入且字节数校验通过，修改时间与 iCloud Drive 一致；失败项自动重试并不会被误报为完成。
+- 原始文件出现在 `Download/iCloud Drive/`，每项完整写入且字节数校验通过；App 内显示和排序使用 iCloud Drive 原始修改时间，系统文件管理器时间仅尽力校正；真正的内容失败项会自动重试。
 - “本地”标签页可逐层浏览已同步文件，搜索并按名称/时间/大小/类型排序，切换列表/网格；图片可缩放和拖动预览，任意本地文件可用临时只读 URI 交给其他 App 打开或分享。
 - 密码/验证码不落盘；重启后仅通过 Keystore 加密会话恢复。
 - 非 HTTPS、白名单外域名和相似域名下载均被拒绝。
