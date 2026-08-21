@@ -35,14 +35,8 @@ class ICloudPreviewLoader @Inject internal constructor(
         val bitmapKey = "$fileKey@$boundedTarget"
         memoryCache.get(bitmapKey)?.let { return@withContext it }
 
+        val destination = ensurePreviewFile(item, fileKey)
         val oriented = downloadMutex.withLock {
-            previewDirectory().mkdirs()
-            val destination = File(previewDirectory(), "$fileKey.bin")
-            if (!destination.isFile || destination.length() <= 0L) {
-                downloadPreview(item, destination)
-                pruneDiskCache(destination)
-            }
-            destination.setLastModified(System.currentTimeMillis())
             val decoded = decodeSampled(destination, boundedTarget)
                 ?: throw ICloudApiException(ICloudError.INVALID_RESPONSE, "Android 无法解码这张图片")
             applyExifRotation(decoded, destination)
@@ -51,10 +45,27 @@ class ICloudPreviewLoader @Inject internal constructor(
         oriented
     }
 
+    suspend fun prepareSource(item: ICloudDriveItem): File = withContext(Dispatchers.IO) {
+        require(isPreviewableImage(item.name)) { "此文件不是可预览的图片" }
+        ensurePreviewFile(item, cacheKey(item))
+    }
+
     fun clear() {
         memoryCache.evictAll()
         previewDirectory().listFiles()?.forEach(File::delete)
     }
+
+    private suspend fun ensurePreviewFile(item: ICloudDriveItem, fileKey: String): File =
+        downloadMutex.withLock {
+            previewDirectory().mkdirs()
+            val destination = File(previewDirectory(), "$fileKey.bin")
+            if (!destination.isFile || destination.length() <= 0L) {
+                downloadPreview(item, destination)
+                pruneDiskCache(destination)
+            }
+            destination.setLastModified(System.currentTimeMillis())
+            destination
+        }
 
     private fun downloadPreview(item: ICloudDriveItem, destination: File) {
         val partial = File(destination.parentFile, destination.name + ".part")

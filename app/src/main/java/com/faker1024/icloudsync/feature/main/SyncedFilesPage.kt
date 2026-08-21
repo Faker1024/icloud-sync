@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as listItems
@@ -23,6 +24,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -63,6 +66,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -75,11 +80,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.net.toUri
 import com.faker1024.icloudsync.core.local.SYNCED_FILES_PUBLIC_PATH
 import com.faker1024.icloudsync.core.local.SyncedBrowserEntry
 import com.faker1024.icloudsync.core.local.SyncedFile
@@ -88,6 +95,9 @@ import com.faker1024.icloudsync.core.settings.LocalBrowserLayout
 import com.faker1024.icloudsync.core.settings.LocalBrowserPreferences
 import com.faker1024.icloudsync.core.settings.LocalSortDirection
 import com.faker1024.icloudsync.core.settings.LocalSortField
+import com.github.panpf.zoomimage.ZoomImageView
+import com.github.panpf.zoomimage.subsampling.ImageSource
+import com.github.panpf.zoomimage.subsampling.fromContent
 import java.text.DateFormat
 import java.util.Date
 import kotlin.coroutines.cancellation.CancellationException
@@ -137,6 +147,9 @@ internal fun SyncedFilesPage(
         )
     }
     val entries = (entriesState as? SyncedEntriesState.Ready)?.entries.orEmpty()
+    val previewImages = remember(entries) {
+        entries.mapNotNull { (it as? SyncedBrowserEntry.File)?.item }.filter(SyncedFile::isImage)
+    }
     val isOrganizing = entriesState == SyncedEntriesState.Loading
     var previewFile by remember { mutableStateOf<SyncedFile?>(null) }
     var actionFile by remember { mutableStateOf<SyncedFile?>(null) }
@@ -155,10 +168,11 @@ internal fun SyncedFilesPage(
     }
     previewFile?.let { file ->
         SyncedImagePreviewDialog(
-            file = file,
+            files = previewImages,
+            selectedFile = file,
             loadImage = loadImage,
-            onOpenExternally = { onOpenFile(file) },
-            onShare = { onShareFile(file) },
+            onOpenExternally = onOpenFile,
+            onShare = onShareFile,
             onDismiss = { previewFile = null },
         )
     }
@@ -654,48 +668,59 @@ private fun SyncedFileActionsSheet(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SyncedImagePreviewDialog(
-    file: SyncedFile,
+    files: List<SyncedFile>,
+    selectedFile: SyncedFile,
     loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,
-    onOpenExternally: () -> Unit,
-    onShare: () -> Unit,
+    onOpenExternally: (SyncedFile) -> Unit,
+    onShare: (SyncedFile) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val zoomState = rememberImageZoomState(file.contentUri)
+    val images = remember(files, selectedFile) {
+        files.takeIf { it.isNotEmpty() } ?: listOf(selectedFile)
+    }
+    val initialPage = remember(images, selectedFile.contentUri) {
+        initialImagePage(images.map(SyncedFile::contentUri), selectedFile.contentUri)
+    }
+    val pagerState = rememberPagerState(initialPage = initialPage) { images.size }
+    val viewers = remember { mutableStateMapOf<String, ZoomImageView>() }
+    val zoomPercents = remember { mutableStateMapOf<String, Int>() }
+    val currentFile = images.getOrElse(pagerState.currentPage) { selectedFile }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-            Column(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 16.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        file.displayName,
+                        currentFile.displayName,
                         modifier = Modifier.weight(1f).padding(start = 8.dp),
                         color = Color.White,
-                        maxLines = 2,
+                        maxLines = 1,
                         fontWeight = FontWeight.Medium,
                     )
                     Text(
-                        "${zoomState.percentage}%",
+                        "${pagerState.currentPage + 1}/${images.size} · ${zoomPercents[currentFile.contentUri] ?: 100}%",
                         color = Color.LightGray,
                         style = MaterialTheme.typography.labelSmall,
                     )
-                    IconButton(onClick = zoomState::reset, enabled = zoomState.canReset) {
+                    IconButton(onClick = { viewers[currentFile.contentUri]?.zoomable?.reset() }) {
                         Icon(
                             Icons.Rounded.Refresh,
                             contentDescription = "还原缩放",
-                            tint = if (zoomState.canReset) Color.White else Color.Gray,
+                            tint = Color.White,
                         )
                     }
-                    IconButton(onClick = onShare) {
+                    IconButton(onClick = { onShare(currentFile) }) {
                         Icon(Icons.Rounded.Share, contentDescription = "分享文件", tint = Color.White)
                     }
-                    IconButton(onClick = onOpenExternally) {
+                    IconButton(onClick = { onOpenExternally(currentFile) }) {
                         Icon(
                             Icons.AutoMirrored.Rounded.InsertDriveFile,
                             contentDescription = "使用其他应用打开",
@@ -709,33 +734,76 @@ private fun SyncedImagePreviewDialog(
                         Icon(Icons.Rounded.Close, contentDescription = "关闭预览", tint = Color.White)
                     }
                 }
-                SyncedBitmapImage(
-                    file = file,
-                    targetPixels = 2560,
-                    contentScale = ContentScale.Fit,
+                HorizontalPager(
+                    state = pagerState,
                     modifier = Modifier.fillMaxWidth().weight(1f),
-                    loadImage = loadImage,
-                    zoomState = zoomState,
-                    fallback = {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                Icons.Rounded.ErrorOutline,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(42.dp),
-                            )
-                            Spacer(Modifier.height(10.dp))
-                            Text("图片加载失败，文件可能已被移动或损坏", color = Color.White)
-                        }
-                    },
-                )
+                    key = { index -> images[index].contentUri },
+                ) { page ->
+                    val file = images[page]
+                    LocalTiledImagePage(
+                        file = file,
+                        loadImage = loadImage,
+                        onViewerChanged = { viewer ->
+                            if (viewer == null) viewers.remove(file.contentUri)
+                            else viewers[file.contentUri] = viewer
+                        },
+                        onZoomPercentChanged = { zoomPercents[file.contentUri] = it },
+                    )
+                }
                 Text(
-                    "${localFileDetails(file)} · 双指缩放 / 双击切换",
-                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(16.dp),
+                    "${localFileDetails(currentFile)} · 左右滑动切换 · 双指缩放 / 双击放大",
+                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(horizontal = 16.dp, vertical = 10.dp),
                     color = Color.LightGray,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun LocalTiledImagePage(
+    file: SyncedFile,
+    loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,
+    onViewerChanged: (ZoomImageView?) -> Unit,
+    onZoomPercentChanged: (Int) -> Unit,
+) {
+    val context = LocalContext.current.applicationContext
+    var retryKey by remember(file.contentUri) { mutableIntStateOf(0) }
+    val loadState by produceState<SyncedImageState>(
+        initialValue = SyncedImageState.Loading,
+        key1 = file.contentUri,
+        key2 = file.modifiedAtMillis,
+        key3 = retryKey,
+    ) {
+        value = try {
+            SyncedImageState.Ready(loadImage(file, LOCAL_VIEWER_THUMBNAIL_PIXELS))
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Throwable) {
+            SyncedImageState.Failed
+        }
+    }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        when (val current = loadState) {
+            SyncedImageState.Loading -> CircularProgressIndicator(color = Color.White)
+            SyncedImageState.Failed -> Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("图片加载失败，文件可能已被移动或损坏", color = Color.White)
+                TextButton(onClick = { retryKey++ }) { Text("重试") }
+            }
+            is SyncedImageState.Ready -> TiledZoomImage(
+                thumbnail = current.bitmap,
+                imageSource = remember(file.contentUri) {
+                    ImageSource.fromContent(context, file.contentUri.toUri())
+                },
+                contentDescription = file.displayName,
+                modifier = Modifier.fillMaxSize(),
+                onViewerChanged = onViewerChanged,
+                onZoomPercentChanged = onZoomPercentChanged,
+            )
         }
     }
 }
@@ -747,7 +815,6 @@ private fun SyncedBitmapImage(
     contentScale: ContentScale,
     modifier: Modifier,
     loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,
-    zoomState: ImageZoomState? = null,
     fallback: @Composable () -> Unit,
 ) {
     val loadState by produceState<SyncedImageState>(
@@ -768,24 +835,17 @@ private fun SyncedBitmapImage(
         when (val current = loadState) {
             SyncedImageState.Loading -> CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
             SyncedImageState.Failed -> fallback()
-            is SyncedImageState.Ready -> if (zoomState != null) {
-                ZoomableBitmapImage(
-                    bitmap = current.bitmap,
-                    contentDescription = file.displayName,
-                    state = zoomState,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Image(
-                    bitmap = current.bitmap.asImageBitmap(),
-                    contentDescription = file.displayName,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = contentScale,
-                )
-            }
+            is SyncedImageState.Ready -> Image(
+                bitmap = current.bitmap.asImageBitmap(),
+                contentDescription = file.displayName,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = contentScale,
+            )
         }
     }
 }
+
+private const val LOCAL_VIEWER_THUMBNAIL_PIXELS = 1280
 
 private sealed interface SyncedImageState {
     data object Loading : SyncedImageState

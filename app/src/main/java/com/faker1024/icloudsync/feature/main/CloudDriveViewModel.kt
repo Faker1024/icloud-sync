@@ -20,6 +20,8 @@ import com.faker1024.icloudsync.core.sync.FolderSyncCoordinator
 import com.faker1024.icloudsync.core.sync.FolderSyncProgressKeys
 import com.faker1024.icloudsync.core.sync.FolderSyncStage
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.io.File
+import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -31,7 +33,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.util.UUID
 
 @HiltViewModel
 class CloudDriveViewModel @Inject constructor(
@@ -204,6 +205,9 @@ class CloudDriveViewModel @Inject constructor(
 
     suspend fun loadImagePreview(item: ICloudDriveItem, targetPixels: Int): Bitmap =
         repository.loadImagePreview(item, targetPixels)
+
+    suspend fun prepareImagePreviewSource(item: ICloudDriveItem): File =
+        repository.prepareImagePreviewSource(item)
 
     fun retryPcsApproval() = startPcsApproval()
 

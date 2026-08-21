@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as listItems
@@ -24,6 +25,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -49,6 +52,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -105,6 +110,10 @@ import com.faker1024.icloudsync.core.settings.CloudSortField
 import com.faker1024.icloudsync.core.settings.MAX_ICON_SIZE
 import com.faker1024.icloudsync.core.settings.MIN_ICON_SIZE
 import com.faker1024.icloudsync.core.sync.FolderSyncStage
+import com.github.panpf.zoomimage.ZoomImageView
+import com.github.panpf.zoomimage.subsampling.ImageSource
+import com.github.panpf.zoomimage.subsampling.fromFile
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlin.math.roundToInt
 
@@ -153,6 +162,7 @@ fun CloudDrivePage(
                 onSetIconSize = viewModel::setIconSize,
                 onSetSorting = viewModel::setSorting,
                 loadPreview = viewModel::loadImagePreview,
+                preparePreviewSource = viewModel::prepareImagePreviewSource,
                 onLogout = viewModel::logout,
                 onClearError = viewModel::clearError,
             )
@@ -398,6 +408,7 @@ private fun BrowserPage(
     onSetIconSize: (Float) -> Unit,
     onSetSorting: (CloudSortField, CloudSortDirection) -> Unit,
     loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
+    preparePreviewSource: suspend (ICloudDriveItem) -> File,
     onLogout: () -> Unit,
     onClearError: () -> Unit,
 ) {
@@ -521,8 +532,13 @@ private fun BrowserPage(
     }
     previewItem?.let { item ->
         ImagePreviewDialog(
-            item = item,
+            items = displayedItems.filter { candidate ->
+                !candidate.isFolder && isPreviewableImage(candidate.name)
+            },
+            selectedItem = item,
             loadPreview = loadPreview,
+            preparePreviewSource = preparePreviewSource,
+            onDownload = onDownload,
             onDismiss = { previewItem = null },
         )
     }
@@ -926,37 +942,53 @@ private fun FolderSyncStatusCard(sync: FolderSyncUiState, onCancel: () -> Unit) 
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ImagePreviewDialog(
-    item: ICloudDriveItem,
+    items: List<ICloudDriveItem>,
+    selectedItem: ICloudDriveItem,
     loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
+    preparePreviewSource: suspend (ICloudDriveItem) -> File,
+    onDownload: (ICloudDriveItem) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val zoomState = rememberImageZoomState(item.id)
+    val images = remember(items, selectedItem) {
+        items.takeIf { it.isNotEmpty() } ?: listOf(selectedItem)
+    }
+    val initialPage = remember(images, selectedItem.id) {
+        initialImagePage(images.map(ICloudDriveItem::id), selectedItem.id)
+    }
+    val pagerState = rememberPagerState(initialPage = initialPage) { images.size }
+    val viewers = remember { mutableStateMapOf<String, ZoomImageView>() }
+    val zoomPercents = remember { mutableStateMapOf<String, Int>() }
+    val currentItem = images.getOrElse(pagerState.currentPage) { selectedItem }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-            Column(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 16.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        item.name,
-                        modifier = Modifier.weight(1f),
+                        currentItem.name,
+                        modifier = Modifier.weight(1f).padding(start = 8.dp),
                         color = Color.White,
-                        maxLines = 2,
+                        maxLines = 1,
                         fontWeight = FontWeight.Medium,
                     )
                     Text(
-                        "${zoomState.percentage}%",
+                        "${pagerState.currentPage + 1}/${images.size} · ${zoomPercents[currentItem.id] ?: 100}%",
                         color = Color.LightGray,
                         style = MaterialTheme.typography.labelSmall,
                     )
-                    TextButton(onClick = zoomState::reset, enabled = zoomState.canReset) {
-                        Text("还原", color = if (zoomState.canReset) Color.White else Color.Gray)
+                    IconButton(onClick = { viewers[currentItem.id]?.zoomable?.reset() }) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = "还原缩放", tint = Color.White)
+                    }
+                    IconButton(onClick = { onDownload(currentItem) }) {
+                        Icon(Icons.Rounded.Download, contentDescription = "下载当前图片", tint = Color.White)
                     }
                     IconButton(
                         onClick = onDismiss,
@@ -965,24 +997,84 @@ private fun ImagePreviewDialog(
                         Icon(Icons.Rounded.Close, contentDescription = "关闭预览", tint = Color.White)
                     }
                 }
-                RemoteImage(
-                    item = item,
-                    targetPixels = 2560,
-                    contentScale = ContentScale.Fit,
+                HorizontalPager(
+                    state = pagerState,
                     modifier = Modifier.fillMaxWidth().weight(1f),
-                    loadPreview = loadPreview,
-                    zoomState = zoomState,
-                    fallback = {
-                        Text("图片加载失败，可返回后重试", color = Color.White)
-                    },
-                )
+                    key = { index -> images[index].id },
+                ) { page ->
+                    val item = images[page]
+                    RemoteTiledImagePage(
+                        item = item,
+                        loadPreview = loadPreview,
+                        preparePreviewSource = preparePreviewSource,
+                        onViewerChanged = { viewer ->
+                            if (viewer == null) viewers.remove(item.id) else viewers[item.id] = viewer
+                        },
+                        onZoomPercentChanged = { zoomPercents[item.id] = it },
+                    )
+                }
                 Text(
-                    "${fileDetails(item)} · 双指缩放 / 双击切换",
-                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(16.dp),
+                    "${fileDetails(currentItem)} · 左右滑动切换 · 双指缩放 / 双击放大",
+                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(horizontal = 16.dp, vertical = 10.dp),
                     color = Color.LightGray,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun RemoteTiledImagePage(
+    item: ICloudDriveItem,
+    loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
+    preparePreviewSource: suspend (ICloudDriveItem) -> File,
+    onViewerChanged: (ZoomImageView?) -> Unit,
+    onZoomPercentChanged: (Int) -> Unit,
+) {
+    var retryKey by remember(item.id) { mutableIntStateOf(0) }
+    val loadState by produceState<PreviewViewerState>(
+        initialValue = PreviewViewerState.Loading,
+        key1 = item.id,
+        key2 = item.modifiedAt,
+        key3 = retryKey,
+    ) {
+        value = try {
+            val file = preparePreviewSource(item)
+            PreviewViewerState.Ready(
+                thumbnail = loadPreview(item, VIEWER_THUMBNAIL_PIXELS),
+                source = ImageSource.fromFile(file),
+            )
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Throwable) {
+            PreviewViewerState.Failed
+        }
+    }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        when (val current = loadState) {
+            PreviewViewerState.Loading -> Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CircularProgressIndicator(color = Color.White)
+                Text("正在准备高清图片…", color = Color.LightGray)
+            }
+            PreviewViewerState.Failed -> Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("图片加载失败", color = Color.White)
+                TextButton(onClick = { retryKey++ }) { Text("重试") }
+            }
+            is PreviewViewerState.Ready -> TiledZoomImage(
+                thumbnail = current.thumbnail,
+                imageSource = current.source,
+                contentDescription = item.name,
+                modifier = Modifier.fillMaxSize(),
+                onViewerChanged = onViewerChanged,
+                onZoomPercentChanged = onZoomPercentChanged,
+            )
         }
     }
 }
@@ -994,7 +1086,6 @@ private fun RemoteImage(
     contentScale: ContentScale,
     modifier: Modifier,
     loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
-    zoomState: ImageZoomState? = null,
     fallback: @Composable () -> Unit,
 ) {
     val loadState by produceState<RemoteImageState>(
@@ -1015,23 +1106,23 @@ private fun RemoteImage(
         when (val current = loadState) {
             RemoteImageState.Loading -> CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
             RemoteImageState.Failed -> fallback()
-            is RemoteImageState.Ready -> if (zoomState != null) {
-                ZoomableBitmapImage(
-                    bitmap = current.bitmap,
-                    contentDescription = item.name,
-                    state = zoomState,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Image(
-                    bitmap = current.bitmap.asImageBitmap(),
-                    contentDescription = item.name,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = contentScale,
-                )
-            }
+            is RemoteImageState.Ready -> Image(
+                bitmap = current.bitmap.asImageBitmap(),
+                contentDescription = item.name,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = contentScale,
+            )
         }
     }
+}
+
+private sealed interface PreviewViewerState {
+    data object Loading : PreviewViewerState
+    data object Failed : PreviewViewerState
+    data class Ready(
+        val thumbnail: android.graphics.Bitmap,
+        val source: ImageSource,
+    ) : PreviewViewerState
 }
 
 private sealed interface RemoteImageState {
@@ -1039,6 +1130,8 @@ private sealed interface RemoteImageState {
     data object Failed : RemoteImageState
     data class Ready(val bitmap: android.graphics.Bitmap) : RemoteImageState
 }
+
+private const val VIEWER_THUMBNAIL_PIXELS = 1280
 
 private fun syncStageText(stage: FolderSyncStage): String = when (stage) {
     FolderSyncStage.QUEUED -> "等待同步"

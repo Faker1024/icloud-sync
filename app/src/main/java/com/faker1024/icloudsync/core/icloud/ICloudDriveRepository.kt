@@ -7,6 +7,7 @@ import com.faker1024.icloudsync.core.sync.DownloadStoreResult
 import com.faker1024.icloudsync.core.sync.ICloudDownloadStore
 import com.faker1024.icloudsync.core.web.CloudDriveDownloads
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +52,9 @@ class ICloudDriveRepository @Inject internal constructor(
 
     suspend fun loadImagePreview(item: ICloudDriveItem, targetPixels: Int): Bitmap =
         previewLoader.load(item, targetPixels)
+
+    suspend fun prepareImagePreviewSource(item: ICloudDriveItem): File =
+        previewLoader.prepareSource(item)
 
     suspend fun saveSyncedFile(
         item: ICloudDriveItem,
