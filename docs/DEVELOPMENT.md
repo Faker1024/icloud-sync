@@ -2,7 +2,7 @@
 
 > 文档状态：原生 UI / 私有 Web 接口 MVP<br>
 > 最后更新：2026-08-21<br>
-> 当前版本：0.12.0
+> 当前版本：0.13.0
 
 ## 1. 产品定义
 
@@ -94,7 +94,7 @@ core/icloud/
 
 core/sync/
 ├── FolderSyncCoordinator.kt # 唯一任务、网络约束、退避策略和状态观察
-└── ICloudDownloadStore.kt   # Downloads 目录层级、原子写入和完整性校验
+└── ICloudDownloadStore.kt   # Downloads 目录层级、原子写入、完整性校验和云端时间保留
 
 core/local/
 ├── SyncedFileModels.kt      # 本地文件、虚拟文件夹和路径边界
@@ -211,7 +211,7 @@ Download/iCloud Drive/
 
 理由是云盘包含文档、归档和项目文件，不能把所有内容写入 DCIM。单文件下载保持在根目录；文件夹同步保存到 `Download/iCloud Drive/{云端相对路径}/`。文件名移除路径分隔符、控制字符和保留字符，最大长度 180。
 
-文件夹同步写入 MediaStore Downloads 集合并使用 `IS_PENDING=1`：文件完整写入且字节数与 HTTP `Content-Length` 一致后才设置为 0；服务端未给长度时回退到 Drive 元数据大小。中断、取消或校验失败会删除 pending 行，因此半截文件不会作为完成文件出现。App 通过 MediaStore 自动维护的 `OWNER_PACKAGE_NAME` 判断自己写入的行；如果目录中已有其他来源的同名文件，生成稳定的 iCloud 后缀文件名，不覆盖用户文件。
+文件夹同步写入 MediaStore Downloads 集合并使用 `IS_PENDING=1`：文件完整写入且字节数与 HTTP `Content-Length` 一致后才设置为 0；服务端未给长度时回退到 Drive 元数据大小。中断、取消或校验失败会删除 pending 行，因此半截文件不会作为完成文件出现。App 通过 MediaStore 自动维护的 `OWNER_PACKAGE_NAME` 判断自己写入的行；如果目录中已有其他来源的同名文件，生成稳定的 iCloud 后缀文件名，不覆盖用户文件。发布完成后解析 Drive `dateModified`，写入实际文件的 `lastModified` 并刷新 MediaStore 只读时间索引；文件系统只支持粗粒度时间时允许 2 秒误差。
 
 ### 5.4 图片缩略图与预览
 
@@ -228,7 +228,7 @@ Download/iCloud Drive/
 3. 每个目录请求和文件保存最多即时尝试 3 次，延迟为 1、2 秒。
 4. 单个文件仍失败时继续处理其余文件，避免一个坏项阻塞整棵目录。
 5. 本轮结束后只要存在失败文件，任务返回 `Result.retry()`；WorkManager 使用 30 秒起始的指数退避，最多执行 6 轮。
-6. 重试时，已由本 App 写入且大小通过校验的文件直接跳过；所有文件都成功后才报告完整同步。
+6. 重试时，已由本 App 写入且大小通过校验的文件不重复下载，但仍会核对并校正 iCloud 修改时间；所有文件都成功后才报告完整同步。
 
 任务上限为 100,000 个文件，防止异常目录响应耗尽内存。MediaStore 不能单独发布完全空的目录，因此只有包含文件的目录会在公共 Downloads 中出现。当前同步是用户发起的单向下载快照，不删除本地多余文件，也不监控之后的云端变化。
 
@@ -347,7 +347,7 @@ Download/iCloud Drive/
 - 可逐层浏览文件夹，图片显示缩略图并可在 App 内预览。
 - 可切换列表/网格、调整图标大小并选择名称/时间/大小/类型排序；设置在 App 重启后保留。
 - 可下载至少文档、压缩包、照片和视频；长按文件夹可保留层级递归同步。
-- 原始文件出现在 `Download/iCloud Drive/`，每项完整写入且字节数校验通过；失败项自动重试并不会被误报为完成。
+- 原始文件出现在 `Download/iCloud Drive/`，每项完整写入且字节数校验通过，修改时间与 iCloud Drive 一致；失败项自动重试并不会被误报为完成。
 - “本地”标签页可逐层浏览已同步文件，搜索并按名称/时间/大小/类型排序，切换列表/网格；图片可缩放和拖动预览，任意本地文件可用临时只读 URI 交给其他 App 打开或分享。
 - 密码/验证码不落盘；重启后仅通过 Keystore 加密会话恢复。
 - 非 HTTPS、白名单外域名和相似域名下载均被拒绝。
