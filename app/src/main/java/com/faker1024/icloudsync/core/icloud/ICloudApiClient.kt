@@ -229,7 +229,8 @@ internal class ICloudApiClient @Inject constructor(
         return ICloudDownloadTicket(downloadUrl, cookieJar.headerFor(parsed))
     }
 
-    fun openDownload(item: ICloudDriveItem): ICloudDownloadSource {
+    fun openDownload(item: ICloudDriveItem, requestedOffset: Long = 0L): ICloudDownloadSource {
+        val safeOffset = requestedOffset.coerceAtLeast(0L)
         val ticket = downloadTicket(item)
         var target = ticket.url.toHttpUrl()
         var cookieHeader = ticket.cookieHeader
@@ -240,6 +241,7 @@ internal class ICloudApiClient @Inject constructor(
                 .header("Accept", "*/*")
                 .header("User-Agent", USER_AGENT)
                 .header("Referer", "$HOME_ENDPOINT/")
+                .apply { if (safeOffset > 0L) header("Range", "bytes=$safeOffset-") }
                 .apply { cookieHeader.takeIf(String::isNotBlank)?.let { header("Cookie", it) } }
                 .build()
             val response = try {
@@ -262,6 +264,10 @@ internal class ICloudApiClient @Inject constructor(
                 target = redirected
                 cookieHeader = cookieJar.headerFor(redirected)
             } else {
+                if (response.code == 416 && safeOffset > 0L) {
+                    response.close()
+                    return openDownload(item, 0L)
+                }
                 if (!response.isSuccessful) {
                     val status = response.code
                     response.close()
@@ -272,10 +278,37 @@ internal class ICloudApiClient @Inject constructor(
                         response.close()
                         throw ICloudApiException(ICloudError.INVALID_RESPONSE, "iCloud 下载内容为空")
                     }
+                val contentRange = parseDownloadContentRange(response.header("Content-Range"))
+                val acceptedOffset = when {
+                    response.code == 206 -> {
+                        if (contentRange?.start != safeOffset) {
+                            response.close()
+                            throw ICloudApiException(
+                                ICloudError.INVALID_RESPONSE,
+                                "iCloud 返回了无效的断点续传范围",
+                            )
+                        }
+                        safeOffset
+                    }
+                    else -> 0L
+                }
+                val bodyLength = body.contentLength()
+                if (
+                    response.code == 206 && bodyLength >= 0L && contentRange != null &&
+                    contentRange.endInclusive - contentRange.start + 1L != bodyLength
+                ) {
+                    response.close()
+                    throw ICloudApiException(ICloudError.INVALID_RESPONSE, "iCloud 断点响应长度不一致")
+                }
+                val totalLength = contentRange?.totalLength
+                    ?: bodyLength.takeIf { it >= 0L }?.let { acceptedOffset + it }
+                    ?: -1L
                 return ICloudDownloadSource(
                     response = response,
                     contentLength = body.contentLength(),
                     mimeType = body.contentType()?.toString(),
+                    startOffset = acceptedOffset,
+                    totalLength = totalLength,
                 )
             }
         }
@@ -523,12 +556,31 @@ internal class ICloudDownloadSource(
     private val response: Response,
     val contentLength: Long,
     val mimeType: String?,
+    val startOffset: Long,
+    val totalLength: Long,
 ) : AutoCloseable {
     val inputStream
         get() = checkNotNull(response.body).byteStream()
 
     override fun close() = response.close()
 }
+
+internal data class DownloadContentRange(
+    val start: Long,
+    val endInclusive: Long,
+    val totalLength: Long?,
+)
+
+internal fun parseDownloadContentRange(value: String?): DownloadContentRange? {
+    val match = DOWNLOAD_CONTENT_RANGE.matchEntire(value?.trim().orEmpty()) ?: return null
+    val start = match.groupValues[1].toLongOrNull() ?: return null
+    val end = match.groupValues[2].toLongOrNull() ?: return null
+    val total = match.groupValues[3].takeUnless { it == "*" }?.toLongOrNull()
+    if (start < 0L || end < start || (total != null && (total <= end || total <= 0L))) return null
+    return DownloadContentRange(start, end, total)
+}
+
+private val DOWNLOAD_CONTENT_RANGE = Regex("bytes\\s+(\\d+)-(\\d+)/(\\d+|\\*)", RegexOption.IGNORE_CASE)
 
 internal object ICloudPcsProtocol {
     fun evaluate(status: String, hasDocumentsCookie: Boolean): ICloudPcsPollResult {

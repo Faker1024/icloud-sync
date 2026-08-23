@@ -12,16 +12,18 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.faker1024.icloudsync.R
-import com.faker1024.icloudsync.core.icloud.ICloudApiException
+import com.faker1024.icloudsync.core.database.SyncFailureDao
+import com.faker1024.icloudsync.core.database.SyncFailureEntity
 import com.faker1024.icloudsync.core.icloud.ICloudDriveItem
 import com.faker1024.icloudsync.core.icloud.ICloudDriveRepository
-import com.faker1024.icloudsync.core.icloud.ICloudError
 import com.faker1024.icloudsync.core.local.PRIVATE_DRIVE_DISPLAY_PATH
 import com.faker1024.icloudsync.core.sync.FolderSyncProgressKeys
 import com.faker1024.icloudsync.core.sync.FolderSyncStage
+import com.faker1024.icloudsync.core.sync.isRetryableTransferError
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.ArrayDeque
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -40,20 +42,27 @@ class FolderSyncWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted params: WorkerParameters,
     private val repository: ICloudDriveRepository,
+    private val failureDao: SyncFailureDao,
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
         val rootFolderId = inputData.getString(KEY_FOLDER_ID) ?: return Result.failure()
         val rootFolderName = inputData.getString(KEY_FOLDER_NAME) ?: "iCloud 文件夹"
         val localRootPath = parsePath(inputData.getString(KEY_LOCAL_PATH_JSON))
+        val retryFailuresOnly = inputData.getBoolean(KEY_RETRY_FAILURES_ONLY, false)
         setForeground(foregroundInfo(FolderSyncStage.QUEUED, rootFolderName, 0, 0))
 
         if (!runCatching { repository.restoreSession() }.getOrDefault(false)) {
             return fail("iCloud 登录已过期，请打开 App 重新登录", rootFolderName)
         }
         return try {
-            val files = scanTree(rootFolderId, localRootPath, rootFolderName)
-            downloadFiles(files, rootFolderName)
+            val files = if (retryFailuresOnly) {
+                loadFailedFiles(rootFolderId)
+            } else {
+                if (runAttemptCount == 0) failureDao.deleteScope(rootFolderId)
+                scanTree(rootFolderId, localRootPath, rootFolderName)
+            }
+            downloadFiles(files, rootFolderName, rootFolderId)
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Throwable) {
@@ -64,7 +73,13 @@ class FolderSyncWorker @AssistedInject constructor(
                 )
                 Result.retry()
             } else {
-                fail(error.safeMessage(), rootFolderName)
+                val persistedFailures = failureDao.listForScope(rootFolderId).size
+                fail(
+                    message = error.safeMessage(),
+                    folderName = rootFolderName,
+                    totalFiles = persistedFailures,
+                    failedFiles = persistedFailures,
+                )
             }
         }
     }
@@ -104,7 +119,26 @@ class FolderSyncWorker @AssistedInject constructor(
         return files
     }
 
-    private suspend fun downloadFiles(files: List<RemoteFile>, rootFolderName: String): Result = coroutineScope {
+    private suspend fun loadFailedFiles(scopeId: String): List<RemoteFile> =
+        failureDao.listForScope(scopeId).map { failure ->
+            RemoteFile(
+                item = ICloudDriveItem(
+                    id = failure.remoteItemId,
+                    name = failure.displayName,
+                    type = failure.remoteType,
+                    size = failure.size,
+                    modifiedAt = failure.modifiedAt,
+                    childCount = 0L,
+                ),
+                localPath = parsePath(failure.localPathJson),
+            )
+        }
+
+    private suspend fun downloadFiles(
+        files: List<RemoteFile>,
+        rootFolderName: String,
+        scopeId: String,
+    ): Result = coroutineScope {
         val totalBytes = files.fold(0L) { total, file -> safeAdd(total, file.item.size.coerceAtLeast(0L)) }
         val completedFiles = AtomicInteger(0)
         val completedBytes = AtomicLong(0L)
@@ -112,8 +146,9 @@ class FolderSyncWorker @AssistedInject constructor(
         val failures = ConcurrentLinkedQueue<String>()
         val progressMutex = Mutex()
         if (files.isEmpty()) {
+            failureDao.deleteScope(scopeId)
             updateProgress(stage = FolderSyncStage.COMPLETE, totalFiles = 0, completedFiles = 0)
-            notifyFinished(rootFolderName, 0, success = true, message = "文件夹为空，无需下载")
+            notifyFinished(rootFolderName, 0, success = true, message = "没有需要重试或下载的文件")
             return@coroutineScope Result.success(successData(0, 0L))
         }
 
@@ -155,14 +190,30 @@ class FolderSyncWorker @AssistedInject constructor(
                 val saved = retryOperation {
                     repository.saveSyncedFile(remote.item, remote.localPath)
                 }
+                failureDao.delete(failureId(scopeId, remote))
                 completedFiles.incrementAndGet()
                 completedBytes.updateAndGet { current -> safeAdd(current, saved.bytes) }
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (error: Throwable) {
-                if (!error.isRetryable()) throw error
                 failures += fileName
                 failedFiles.incrementAndGet()
+                failureDao.upsert(
+                    SyncFailureEntity(
+                        id = failureId(scopeId, remote),
+                        scopeId = scopeId,
+                        rootFolderName = rootFolderName,
+                        remoteItemId = remote.item.id,
+                        displayName = remote.item.name,
+                        remoteType = remote.item.type,
+                        size = remote.item.size,
+                        modifiedAt = remote.item.modifiedAt,
+                        localPathJson = JSONArray(remote.localPath).toString(),
+                        errorMessage = error.safeMessage().take(MAX_FAILURE_MESSAGE),
+                        updatedAt = System.currentTimeMillis(),
+                    ),
+                )
+                if (!error.isRetryable()) throw error
             }
             publishProgress(fileName)
         }
@@ -213,6 +264,7 @@ class FolderSyncWorker @AssistedInject constructor(
             totalBytes = totalBytes,
             completedBytes = completedByteCount,
         )
+        failureDao.deleteScope(scopeId)
         notifyFinished(rootFolderName, completedFileCount, success = true, message = "所有文件均已校验，iCloud 日期已记录")
         Result.success(successData(completedFileCount, completedByteCount))
     }
@@ -338,15 +390,8 @@ class FolderSyncWorker @AssistedInject constructor(
             ?.notify(COMPLETION_NOTIFICATION_ID_BASE + id.hashCode().and(0x0FFF), notification)
     }
 
-    private fun Throwable.isRetryable(): Boolean = when ((this as? ICloudApiException)?.reason) {
-        ICloudError.BAD_CREDENTIALS,
-        ICloudError.BAD_CODE,
-        ICloudError.SESSION_EXPIRED,
-        ICloudError.ADVANCED_DATA_PROTECTION,
-        ICloudError.INVALID_RESPONSE,
-        -> false
-        else -> this !is FolderSyncFatalException
-    }
+    private fun Throwable.isRetryable(): Boolean =
+        isRetryableTransferError() && this !is FolderSyncFatalException
 
     private fun Throwable.safeMessage(): String = message?.takeIf(String::isNotBlank)
         ?: "文件夹同步失败，请打开 App 后重试"
@@ -359,6 +404,13 @@ class FolderSyncWorker @AssistedInject constructor(
     private fun safeAdd(left: Long, right: Long): Long =
         if (Long.MAX_VALUE - left < right) Long.MAX_VALUE else left + right
 
+    private fun failureId(scopeId: String, remote: RemoteFile): String {
+        val value = "$scopeId\u0000${remote.item.id}\u0000${remote.localPath.joinToString("\u0000")}"
+        return MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+    }
+
     private data class RemoteFolder(val id: String, val localPath: List<String>)
     private data class RemoteFile(val item: ICloudDriveItem, val localPath: List<String>)
     private class FolderSyncFatalException(message: String) : Exception(message)
@@ -367,12 +419,14 @@ class FolderSyncWorker @AssistedInject constructor(
         const val KEY_FOLDER_ID = "folder_id"
         const val KEY_FOLDER_NAME = "folder_name"
         const val KEY_LOCAL_PATH_JSON = "local_path_json"
+        const val KEY_RETRY_FAILURES_ONLY = "retry_failures_only"
         private const val MAX_FILES_PER_SYNC = 100_000
         private const val PER_OPERATION_ATTEMPTS = 3
         private const val DOWNLOAD_CONCURRENCY = 3
         private const val MAX_TASK_RETRIES = 5
         private const val PER_OPERATION_RETRY_DELAY_MS = 1_000L
         private const val MAX_PROGRESS_FILE_NAME = 160
+        private const val MAX_FAILURE_MESSAGE = 300
         private const val NOTIFICATION_ID_BASE = 30_000
         private const val COMPLETION_NOTIFICATION_ID_BASE = 40_000
     }

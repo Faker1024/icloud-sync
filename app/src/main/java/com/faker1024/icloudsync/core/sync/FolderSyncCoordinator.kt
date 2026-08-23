@@ -10,6 +10,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.faker1024.icloudsync.core.database.SyncFailureDao
 import com.faker1024.icloudsync.core.settings.CloudBrowserSettings
 import com.faker1024.icloudsync.core.local.PRIVATE_DRIVE_DISPLAY_PATH
 import com.faker1024.icloudsync.core.worker.FolderSyncWorker
@@ -21,13 +22,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 
 @Singleton
 class FolderSyncCoordinator @Inject constructor(
-    @param:ApplicationContext context: Context,
+    @ApplicationContext context: Context,
     private val settings: CloudBrowserSettings,
+    private val failureDao: SyncFailureDao,
 ) {
     private val workManager = WorkManager.getInstance(context)
 
@@ -48,6 +51,7 @@ class FolderSyncCoordinator @Inject constructor(
                         FolderSyncWorker.KEY_FOLDER_ID to folderId,
                         FolderSyncWorker.KEY_FOLDER_NAME to folderName,
                         FolderSyncWorker.KEY_LOCAL_PATH_JSON to JSONArray(localPath).toString(),
+                        FolderSyncWorker.KEY_RETRY_FAILURES_ONLY to false,
                     ),
                 )
                 .setConstraints(
@@ -72,6 +76,54 @@ class FolderSyncCoordinator @Inject constructor(
     }
 
     fun observe(workId: UUID): Flow<WorkInfo?> = workManager.getWorkInfoByIdLiveData(workId).asFlow()
+
+    fun observeFailures(folderId: String): Flow<List<SyncFailureDetail>> =
+        failureDao.observeForScope(folderId).map { failures ->
+            failures.map { failure ->
+                SyncFailureDetail(
+                    fileName = failure.displayName,
+                    localPath = runCatching {
+                        val array = JSONArray(failure.localPathJson)
+                        List(array.length()) { index -> array.getString(index) }
+                    }.getOrDefault(emptyList()),
+                    error = failure.errorMessage,
+                )
+            }
+        }
+
+    suspend fun retryFailures(
+        folderId: String,
+        folderName: String,
+        displayPath: String,
+    ): UUID = withContext(Dispatchers.IO) {
+        val uniqueName = uniqueWorkName(folderId)
+        val existing = workManager.getWorkInfosForUniqueWork(uniqueName).get()
+            .firstOrNull { !it.state.isFinished }
+        val workId = if (existing != null) {
+            existing.id
+        } else {
+            val request = OneTimeWorkRequestBuilder<FolderSyncWorker>()
+                .setInputData(
+                    workDataOf(
+                        FolderSyncWorker.KEY_FOLDER_ID to folderId,
+                        FolderSyncWorker.KEY_FOLDER_NAME to folderName,
+                        FolderSyncWorker.KEY_LOCAL_PATH_JSON to "[]",
+                        FolderSyncWorker.KEY_RETRY_FAILURES_ONLY to true,
+                    ),
+                )
+                .setConstraints(
+                    Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
+                )
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag(FOLDER_SYNC_TAG)
+                .addTag(uniqueName)
+                .build()
+            workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.REPLACE, request)
+            request.id
+        }
+        settings.setLastSync(workId.toString(), folderId, folderName, displayPath)
+        workId
+    }
 
     fun cancel(workId: UUID) {
         workManager.cancelWorkById(workId)
@@ -114,3 +166,9 @@ object FolderSyncProgressKeys {
     const val CURRENT_FILE = "sync_current_file"
     const val ERROR = "sync_error"
 }
+
+data class SyncFailureDetail(
+    val fileName: String,
+    val localPath: List<String>,
+    val error: String,
+)

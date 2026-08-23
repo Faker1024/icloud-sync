@@ -26,4 +26,7 @@ object DatabaseModule {
     @Provides
     fun provideSyncedFileMetadataDao(database: AppDatabase): SyncedFileMetadataDao =
         database.syncedFileMetadataDao()
+
+    @Provides
+    fun provideSyncFailureDao(database: AppDatabase): SyncFailureDao = database.syncFailureDao()
 }

@@ -83,3 +83,21 @@ data class SyncedFileMetadataEntity(
     val remoteModifiedAtMillis: Long,
     val updatedAt: Long,
 )
+
+@Entity(
+    tableName = "sync_failures",
+    indices = [Index("scopeId"), Index("remoteItemId")],
+)
+data class SyncFailureEntity(
+    @PrimaryKey val id: String,
+    val scopeId: String,
+    val rootFolderName: String,
+    val remoteItemId: String,
+    val displayName: String,
+    val remoteType: String,
+    val size: Long,
+    val modifiedAt: String?,
+    val localPathJson: String,
+    val errorMessage: String,
+    val updatedAt: Long,
+)

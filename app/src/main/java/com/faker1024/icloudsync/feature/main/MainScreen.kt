@@ -85,6 +85,7 @@ fun MainScreen(
     viewModel: MainViewModel,
     cloudDriveViewModel: CloudDriveViewModel,
     onSyncFolder: (ICloudDriveItem) -> Unit,
+    onDownloadFile: (ICloudDriveItem) -> Unit,
     onSelectFile: () -> Unit,
 ) {
     val batches by viewModel.batches.collectAsStateWithLifecycle()
@@ -170,6 +171,7 @@ fun MainScreen(
                     scope.launch { snackbarHostState.showSnackbar(message) }
                 },
                 onSyncFolder = onSyncFolder,
+                onDownloadFile = onDownloadFile,
             )
 
             MainSection.LOCAL_FILES -> SyncedFilesPage(

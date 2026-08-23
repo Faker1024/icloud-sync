@@ -2,6 +2,7 @@ package com.faker1024.icloudsync.core.icloud
 
 import android.graphics.Bitmap
 import com.faker1024.icloudsync.core.sync.DownloadStoreResult
+import com.faker1024.icloudsync.core.sync.DownloadWriteProgress
 import com.faker1024.icloudsync.core.sync.ICloudDownloadStore
 import java.io.File
 import javax.inject.Inject
@@ -34,11 +35,6 @@ class ICloudDriveRepository @Inject internal constructor(
     suspend fun listFolder(folderId: String): List<ICloudDriveItem> =
         withContext(Dispatchers.IO) { api.listFolder(folderId) }
 
-    suspend fun download(item: ICloudDriveItem): String = withContext(Dispatchers.IO) {
-        saveSyncedFile(item, emptyList())
-        item.name
-    }
-
     suspend fun loadImagePreview(item: ICloudDriveItem, targetPixels: Int): Bitmap =
         previewLoader.load(item, targetPixels)
 
@@ -48,11 +44,13 @@ class ICloudDriveRepository @Inject internal constructor(
     suspend fun saveSyncedFile(
         item: ICloudDriveItem,
         directories: List<String>,
+        onProgress: suspend (DownloadWriteProgress) -> Unit = {},
     ): DownloadStoreResult = withContext(Dispatchers.IO) {
         downloadStore.save(
             item = item,
             directories = directories,
-            sourceProvider = { api.openDownload(item) },
+            onProgress = onProgress,
+            sourceProvider = { offset -> api.openDownload(item, offset) },
         )
     }
 

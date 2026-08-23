@@ -20,6 +20,10 @@ import com.faker1024.icloudsync.core.settings.CloudSortField
 import com.faker1024.icloudsync.core.sync.FolderSyncCoordinator
 import com.faker1024.icloudsync.core.sync.FolderSyncProgressKeys
 import com.faker1024.icloudsync.core.sync.FolderSyncStage
+import com.faker1024.icloudsync.core.sync.FileDownloadCoordinator
+import com.faker1024.icloudsync.core.sync.FileDownloadProgressKeys
+import com.faker1024.icloudsync.core.sync.FileDownloadStage
+import com.faker1024.icloudsync.core.sync.SyncFailureDetail
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.io.File
 import java.util.UUID
@@ -40,6 +44,7 @@ class CloudDriveViewModel @Inject constructor(
     private val repository: ICloudDriveRepository,
     private val browserSettings: CloudBrowserSettings,
     private val folderSyncCoordinator: FolderSyncCoordinator,
+    private val fileDownloadCoordinator: FileDownloadCoordinator,
 ) : ViewModel() {
     private val _state = MutableStateFlow(CloudDriveUiState())
     val state = _state.asStateFlow()
@@ -47,9 +52,11 @@ class CloudDriveViewModel @Inject constructor(
     val events = _events.asSharedFlow()
     private var pcsApprovalJob: Job? = null
     private var syncObservationJob: Job? = null
+    private var failureObservationJob: Job? = null
     private var observedSyncId: UUID? = null
 
     init {
+        observeFileDownloads()
         viewModelScope.launch {
             browserSettings.preferences.collectLatest { preferences ->
                 _state.update {
@@ -165,12 +172,21 @@ class CloudDriveViewModel @Inject constructor(
     fun download(item: ICloudDriveItem) {
         if (item.isFolder || item.id in _state.value.downloadingIds) return
         _state.update { it.copy(downloadingIds = it.downloadingIds + item.id) }
+        val localPath = _state.value.path.drop(1).map(ICloudFolder::name)
         viewModelScope.launch {
-            runCatching { repository.download(item) }
-                .onSuccess { fileName -> _events.emit("$fileName 已保存到 APP 私密存储") }
-                .onFailure { error -> _events.emit(error.userMessage()) }
-            _state.update { it.copy(downloadingIds = it.downloadingIds - item.id) }
+            runCatching { fileDownloadCoordinator.enqueue(item, localPath) }
+                .onSuccess { _events.emit("${item.name} 已加入后台下载，可在通知中查看进度") }
+                .onFailure { error ->
+                    _state.update { it.copy(downloadingIds = it.downloadingIds - item.id) }
+                    _events.emit(error.userMessage())
+                }
         }
+    }
+
+    fun cancelFileDownload(itemId: String) {
+        val task = _state.value.fileDownloads[itemId] ?: return
+        fileDownloadCoordinator.cancel(task.workId)
+        _events.tryEmit("已暂停下载，重新点击时会尝试从断点继续")
     }
 
     fun syncFolder(item: ICloudDriveItem) {
@@ -187,6 +203,22 @@ class CloudDriveViewModel @Inject constructor(
         val workId = _state.value.folderSync?.workId ?: return
         folderSyncCoordinator.cancel(workId)
         _events.tryEmit("已取消文件夹同步")
+    }
+
+    fun retryFailedFolderFiles() {
+        val sync = _state.value.folderSync ?: return
+        if (sync.isActive || sync.failures.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                folderSyncCoordinator.retryFailures(sync.folderId, sync.folderName, sync.displayPath)
+            }.onSuccess { id ->
+                observedSyncId = id
+                observeFolderSync(id, sync.folderId, sync.folderName, sync.displayPath)
+                _events.emit("已重新加入 ${sync.failures.size} 个失败文件")
+            }.onFailure { error ->
+                _events.emit(error.userMessage())
+            }
+        }
     }
 
     fun setLayout(layout: CloudBrowserLayout) {
@@ -218,8 +250,11 @@ class CloudDriveViewModel @Inject constructor(
         _state.value.folderSync?.takeIf(FolderSyncUiState::isActive)?.let {
             folderSyncCoordinator.cancel(it.workId)
         }
+        _state.value.fileDownloads.values.forEach { fileDownloadCoordinator.cancel(it.workId) }
         syncObservationJob?.cancel()
         syncObservationJob = null
+        failureObservationJob?.cancel()
+        failureObservationJob = null
         repository.logout()
         _state.value = loggedOutState()
         _events.tryEmit("已清除本机 iCloud 登录会话")
@@ -351,6 +386,7 @@ class CloudDriveViewModel @Inject constructor(
         displayPath: String,
     ) {
         syncObservationJob?.cancel()
+        failureObservationJob?.cancel()
         _state.update {
             it.copy(
                 folderSync = FolderSyncUiState(
@@ -366,8 +402,37 @@ class CloudDriveViewModel @Inject constructor(
             folderSyncCoordinator.observe(id).collect { info ->
                 if (info != null) {
                     _state.update {
-                        it.copy(folderSync = info.toFolderSyncUi(folderId, folderName, displayPath))
+                        val mapped = info.toFolderSyncUi(folderId, folderName, displayPath)
+                        val failures = it.folderSync?.takeIf { current -> current.folderId == folderId }?.failures.orEmpty()
+                        it.copy(folderSync = mapped.copy(failures = failures))
                     }
+                }
+            }
+        }
+        failureObservationJob = viewModelScope.launch {
+            folderSyncCoordinator.observeFailures(folderId).collect { failures ->
+                _state.update { current ->
+                    val sync = current.folderSync
+                    if (sync?.folderId == folderId) current.copy(folderSync = sync.copy(failures = failures))
+                    else current
+                }
+            }
+        }
+    }
+
+    private fun observeFileDownloads() {
+        viewModelScope.launch {
+            fileDownloadCoordinator.observeAll().collectLatest { workInfos ->
+                val active = workInfos
+                    .asSequence()
+                    .filterNot { it.state.isFinished }
+                    .mapNotNull { info -> info.toFileDownloadUi() }
+                    .associateBy(FileDownloadUiState::itemId)
+                _state.update {
+                    it.copy(
+                        downloadingIds = active.keys,
+                        fileDownloads = active,
+                    )
                 }
             }
         }
@@ -399,7 +464,22 @@ data class CloudDriveUiState(
     val sortField: CloudSortField = CloudSortField.NAME,
     val sortDirection: CloudSortDirection = CloudSortDirection.ASCENDING,
     val folderSync: FolderSyncUiState? = null,
+    val fileDownloads: Map<String, FileDownloadUiState> = emptyMap(),
 )
+
+data class FileDownloadUiState(
+    val workId: UUID,
+    val itemId: String,
+    val stage: FileDownloadStage,
+    val bytes: Long = 0L,
+    val totalBytes: Long = 0L,
+    val resumedBytes: Long = 0L,
+    val error: String? = null,
+) {
+    val progress: Float?
+        get() = totalBytes.takeIf { it > 0L }
+            ?.let { (bytes.toDouble() / it.toDouble()).toFloat().coerceIn(0f, 1f) }
+}
 
 data class FolderSyncUiState(
     val workId: UUID,
@@ -415,6 +495,7 @@ data class FolderSyncUiState(
     val completedBytes: Long = 0L,
     val currentFile: String = "",
     val error: String? = null,
+    val failures: List<SyncFailureDetail> = emptyList(),
 ) {
     val isActive: Boolean
         get() = stage in setOf(
@@ -423,6 +504,28 @@ data class FolderSyncUiState(
             FolderSyncStage.DOWNLOADING,
             FolderSyncStage.RETRYING,
         )
+}
+
+private fun WorkInfo.toFileDownloadUi(): FileDownloadUiState? {
+    val itemId = FileDownloadCoordinator.itemId(this) ?: return null
+    val data = if (state.isFinished) outputData else progress
+    val stage = data.getString(FileDownloadProgressKeys.STAGE)?.let { value ->
+        runCatching { FileDownloadStage.valueOf(value) }.getOrNull()
+    } ?: when (state) {
+        WorkInfo.State.RUNNING -> FileDownloadStage.DOWNLOADING
+        WorkInfo.State.SUCCEEDED -> FileDownloadStage.COMPLETE
+        WorkInfo.State.FAILED, WorkInfo.State.CANCELLED -> FileDownloadStage.FAILED
+        else -> FileDownloadStage.QUEUED
+    }
+    return FileDownloadUiState(
+        workId = id,
+        itemId = itemId,
+        stage = stage,
+        bytes = data.getLong(FileDownloadProgressKeys.BYTES, 0L),
+        totalBytes = data.getLong(FileDownloadProgressKeys.TOTAL_BYTES, 0L),
+        resumedBytes = data.getLong(FileDownloadProgressKeys.RESUMED_BYTES, 0L),
+        error = data.getString(FileDownloadProgressKeys.ERROR),
+    )
 }
 
 enum class CloudDrivePhase { RESTORING, LOGGED_OUT, AUTHENTICATING, TWO_FACTOR, PCS_APPROVAL, BROWSING }

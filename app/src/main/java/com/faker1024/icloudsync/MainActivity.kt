@@ -69,6 +69,13 @@ private fun ICloudSyncApp(
         pendingSyncFolder?.let(cloudDriveViewModel::syncFolder)
         pendingSyncFolder = null
     }
+    var pendingDownloadFile by remember { mutableStateOf<ICloudDriveItem?>(null) }
+    val downloadNotificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        pendingDownloadFile?.let(cloudDriveViewModel::download)
+        pendingDownloadFile = null
+    }
 
     MainScreen(
         viewModel = viewModel,
@@ -83,6 +90,18 @@ private fun ICloudSyncApp(
                 syncNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             } else {
                 cloudDriveViewModel.syncFolder(folder)
+            }
+        },
+        onDownloadFile = { file ->
+            if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                pendingDownloadFile = file
+                downloadNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                cloudDriveViewModel.download(file)
             }
         },
         onSelectFile = {

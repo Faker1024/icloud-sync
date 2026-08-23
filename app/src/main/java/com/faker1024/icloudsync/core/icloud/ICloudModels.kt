@@ -1,5 +1,7 @@
 package com.faker1024.icloudsync.core.icloud
 
+import java.util.Base64
+
 data class ICloudDriveItem(
     val id: String,
     val name: String,
@@ -11,6 +13,39 @@ data class ICloudDriveItem(
     val isFolder: Boolean
         get() = type == "FOLDER" || type == "APP_CONTAINER" || type == "APP_LIBRARY"
 }
+
+internal fun ICloudDriveItem.toWorkPayload(): String = listOf(
+    WORK_PAYLOAD_VERSION,
+    encodeWorkValue(id),
+    encodeWorkValue(name),
+    encodeWorkValue(type),
+    size.toString(),
+    encodeWorkValue(modifiedAt.orEmpty()),
+    childCount.toString(),
+).joinToString(WORK_PAYLOAD_SEPARATOR)
+
+internal fun iCloudDriveItemFromWorkPayload(value: String?): ICloudDriveItem? = runCatching {
+    val parts = value?.split(WORK_PAYLOAD_SEPARATOR) ?: return@runCatching null
+    if (parts.size != WORK_PAYLOAD_PARTS || parts[0] != WORK_PAYLOAD_VERSION) return@runCatching null
+    ICloudDriveItem(
+        id = decodeWorkValue(parts[1]),
+        name = decodeWorkValue(parts[2]),
+        type = decodeWorkValue(parts[3]),
+        size = parts[4].toLong(),
+        modifiedAt = decodeWorkValue(parts[5]).takeIf(String::isNotBlank),
+        childCount = parts[6].toLong(),
+    ).takeIf { it.id.isNotBlank() && it.name.isNotBlank() && !it.isFolder }
+}.getOrNull()
+
+private fun encodeWorkValue(value: String): String =
+    Base64.getUrlEncoder().withoutPadding().encodeToString(value.toByteArray(Charsets.UTF_8))
+
+private fun decodeWorkValue(value: String): String =
+    String(Base64.getUrlDecoder().decode(value), Charsets.UTF_8)
+
+private const val WORK_PAYLOAD_VERSION = "1"
+private const val WORK_PAYLOAD_SEPARATOR = "|"
+private const val WORK_PAYLOAD_PARTS = 7
 
 data class ICloudFolder(val id: String, val name: String)
 

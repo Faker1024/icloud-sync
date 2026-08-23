@@ -1,5 +1,6 @@
 package com.faker1024.icloudsync.core.sync
 
+import com.faker1024.icloudsync.core.icloud.ICloudDriveItem
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -41,4 +42,58 @@ class ICloudDownloadStoreTest {
         assertEquals(true, modifiedTimeMatches(100L, 102L))
         assertEquals(false, modifiedTimeMatches(100L, 103L))
     }
+
+    @Test
+    fun `remote fingerprint rejects same size file with a newer cloud modification`() {
+        val item = cloudFile(modifiedAt = "2024-03-20T10:20:05Z")
+        assertEquals(
+            false,
+            remoteFileFingerprintMatches(
+                storedRemoteId = item.id,
+                storedSize = item.size,
+                storedModifiedAtMillis = 1_710_930_000_000L,
+                item = item,
+                actualSize = item.size,
+            ),
+        )
+    }
+
+    @Test
+    fun `remote fingerprint reuses exact file when id size and modification match`() {
+        val item = cloudFile(modifiedAt = "2024-03-20T10:20:00Z")
+        assertEquals(
+            true,
+            remoteFileFingerprintMatches(
+                storedRemoteId = item.id,
+                storedSize = item.size,
+                storedModifiedAtMillis = 1_710_930_000_000L,
+                item = item,
+                actualSize = item.size,
+            ),
+        )
+    }
+
+    @Test
+    fun `legacy migration fingerprint can be claimed only when size and time match`() {
+        val item = cloudFile(modifiedAt = "2024-03-20T10:20:00Z")
+        assertEquals(
+            true,
+            remoteFileFingerprintMatches(
+                storedRemoteId = "legacy:content://downloads/42",
+                storedSize = item.size,
+                storedModifiedAtMillis = 1_710_930_000_000L,
+                item = item,
+                actualSize = item.size,
+            ),
+        )
+    }
+
+    private fun cloudFile(modifiedAt: String?) = ICloudDriveItem(
+        id = "FILE::com.apple.CloudDocs::document-1",
+        name = "example.bin",
+        type = "FILE",
+        size = 4_096L,
+        modifiedAt = modifiedAt,
+        childCount = 0L,
+    )
 }

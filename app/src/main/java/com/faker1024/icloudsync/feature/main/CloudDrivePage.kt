@@ -130,6 +130,7 @@ fun CloudDrivePage(
     modifier: Modifier = Modifier,
     onMessage: (String) -> Unit,
     onSyncFolder: (ICloudDriveItem) -> Unit,
+    onDownloadFile: (ICloudDriveItem) -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     LaunchedEffect(viewModel) { viewModel.events.collect(onMessage) }
@@ -162,9 +163,11 @@ fun CloudDrivePage(
                 onBack = viewModel::navigateBack,
                 onRefresh = viewModel::refresh,
                 onOpen = viewModel::openFolder,
-                onDownload = viewModel::download,
+                onDownload = onDownloadFile,
+                onCancelDownload = viewModel::cancelFileDownload,
                 onSyncFolder = onSyncFolder,
                 onCancelSync = viewModel::cancelFolderSync,
+                onRetryFailedSync = viewModel::retryFailedFolderFiles,
                 onSetLayout = viewModel::setLayout,
                 onSetIconSize = viewModel::setIconSize,
                 onSetSorting = viewModel::setSorting,
@@ -409,8 +412,10 @@ private fun BrowserPage(
     onRefresh: () -> Unit,
     onOpen: (ICloudDriveItem) -> Unit,
     onDownload: (ICloudDriveItem) -> Unit,
+    onCancelDownload: (String) -> Unit,
     onSyncFolder: (ICloudDriveItem) -> Unit,
     onCancelSync: () -> Unit,
+    onRetryFailedSync: () -> Unit,
     onSetLayout: (CloudBrowserLayout) -> Unit,
     onSetIconSize: (Float) -> Unit,
     onSetSorting: (CloudSortField, CloudSortDirection) -> Unit,
@@ -666,7 +671,11 @@ private fun BrowserPage(
             }
         }
         state.folderSync?.let { sync ->
-            FolderSyncStatusCard(sync = sync, onCancel = onCancelSync)
+            FolderSyncStatusCard(
+                sync = sync,
+                onCancel = onCancelSync,
+                onRetryFailures = onRetryFailedSync,
+            )
         }
         if (state.isBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
         state.error?.let { ErrorCard(it, onClearError, Modifier.padding(horizontal = 12.dp)) }
@@ -689,12 +698,13 @@ private fun BrowserPage(
                         DriveItemRow(
                             item = item,
                             iconSize = state.iconSize,
-                            downloading = item.id in state.downloadingIds,
+                            download = state.fileDownloads[item.id],
                             syncing = state.folderSync?.let { it.folderId == item.id && it.isActive } == true,
                             onOpen = { onOpen(item) },
                             onPreview = { previewItem = item },
                             onLongPressFolder = { pendingSyncFolder = item },
                             onDownload = { onDownload(item) },
+                            onCancelDownload = { onCancelDownload(item.id) },
                             loadPreview = loadPreview,
                         )
                     }
@@ -711,12 +721,13 @@ private fun BrowserPage(
                         DriveItemGridCell(
                             item = item,
                             iconSize = state.iconSize,
-                            downloading = item.id in state.downloadingIds,
+                            download = state.fileDownloads[item.id],
                             syncing = state.folderSync?.let { it.folderId == item.id && it.isActive } == true,
                             onOpen = { onOpen(item) },
                             onPreview = { previewItem = item },
                             onLongPressFolder = { pendingSyncFolder = item },
                             onDownload = { onDownload(item) },
+                            onCancelDownload = { onCancelDownload(item.id) },
                             loadPreview = loadPreview,
                         )
                     }
@@ -731,14 +742,16 @@ private fun BrowserPage(
 private fun DriveItemRow(
     item: ICloudDriveItem,
     iconSize: Float,
-    downloading: Boolean,
+    download: FileDownloadUiState?,
     syncing: Boolean,
     onOpen: () -> Unit,
     onPreview: () -> Unit,
     onLongPressFolder: () -> Unit,
     onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
     loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
 ) {
+    val downloading = download != null
     val canPreview = !item.isFolder && isPreviewableImage(item.name)
     IosGroupedSurface(
         modifier = Modifier.fillMaxWidth().combinedClickable(
@@ -759,7 +772,7 @@ private fun DriveItemRow(
                     if (item.isFolder) {
                         "${item.childCount} 项${if (syncing) " · 正在同步" else " · 长按同步"}"
                     } else {
-                        fileDetails(item)
+                        download?.let(::fileDownloadText) ?: fileDetails(item)
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -772,10 +785,20 @@ private fun DriveItemRow(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                TextButton(onClick = onDownload, enabled = !downloading) {
-                    Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(17.dp))
+                TextButton(onClick = if (downloading) onCancelDownload else onDownload) {
+                    Icon(
+                        if (downloading) Icons.Rounded.Close else Icons.Rounded.Download,
+                        contentDescription = null,
+                        modifier = Modifier.size(17.dp),
+                    )
                     Spacer(Modifier.size(4.dp))
-                    Text(if (downloading) "准备中" else "下载")
+                    Text(
+                        if (downloading) {
+                            download?.progress?.let { "暂停 ${(it * 100).roundToInt()}%" } ?: "暂停"
+                        } else {
+                            "下载"
+                        },
+                    )
                 }
             }
         }
@@ -787,14 +810,16 @@ private fun DriveItemRow(
 private fun DriveItemGridCell(
     item: ICloudDriveItem,
     iconSize: Float,
-    downloading: Boolean,
+    download: FileDownloadUiState?,
     syncing: Boolean,
     onOpen: () -> Unit,
     onPreview: () -> Unit,
     onLongPressFolder: () -> Unit,
     onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
     loadPreview: suspend (ICloudDriveItem, Int) -> android.graphics.Bitmap,
 ) {
+    val downloading = download != null
     val canPreview = !item.isFolder && isPreviewableImage(item.name)
     IosGroupedSurface(
         modifier = Modifier.fillMaxWidth().combinedClickable(
@@ -815,17 +840,27 @@ private fun DriveItemGridCell(
                 if (item.isFolder) {
                     "${item.childCount} 项${if (syncing) " · 同步中" else ""}"
                 } else {
-                    fileDetails(item)
+                    download?.let(::fileDownloadText) ?: fileDetails(item)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
             if (!item.isFolder) {
-                TextButton(onClick = onDownload, enabled = !downloading) {
-                    Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(17.dp))
+                TextButton(onClick = if (downloading) onCancelDownload else onDownload) {
+                    Icon(
+                        if (downloading) Icons.Rounded.Close else Icons.Rounded.Download,
+                        contentDescription = null,
+                        modifier = Modifier.size(17.dp),
+                    )
                     Spacer(Modifier.size(4.dp))
-                    Text(if (downloading) "准备中" else "下载")
+                    Text(
+                        if (downloading) {
+                            download?.progress?.let { "暂停 ${(it * 100).roundToInt()}%" } ?: "暂停"
+                        } else {
+                            "下载"
+                        },
+                    )
                 }
             } else {
                 Text(
@@ -883,7 +918,11 @@ private fun DriveItemVisual(
 }
 
 @Composable
-private fun FolderSyncStatusCard(sync: FolderSyncUiState, onCancel: () -> Unit) {
+private fun FolderSyncStatusCard(
+    sync: FolderSyncUiState,
+    onCancel: () -> Unit,
+    onRetryFailures: () -> Unit,
+) {
     val failed = sync.stage == FolderSyncStage.FAILED
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
@@ -938,6 +977,33 @@ private fun FolderSyncStatusCard(sync: FolderSyncUiState, onCancel: () -> Unit) 
             }
             sync.error?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+            if (sync.failures.isNotEmpty()) {
+                Text("失败明细", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                sync.failures.take(5).forEach { failure ->
+                    val path = (failure.localPath + failure.fileName).joinToString("/")
+                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Text(path, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                        Text(
+                            failure.error,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 2,
+                        )
+                    }
+                }
+                if (sync.failures.size > 5) {
+                    Text(
+                        "另有 ${sync.failures.size - 5} 个失败文件",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (!sync.isActive) {
+                    OutlinedButton(onClick = onRetryFailures, modifier = Modifier.fillMaxWidth()) {
+                        Text("仅重试 ${sync.failures.size} 个失败文件")
+                    }
+                }
             }
             Text(
                 sync.displayPath,
@@ -1309,6 +1375,13 @@ private fun fileDetails(item: ICloudDriveItem): String {
     val size = formatFileSize(item.size)
     val date = item.modifiedAt?.take(10)
     return listOfNotNull(size, date).joinToString(" · ")
+}
+
+private fun fileDownloadText(download: FileDownloadUiState): String {
+    val written = if (download.bytes > 0L) formatFileSize(download.bytes) else "0 B"
+    val total = download.totalBytes.takeIf { it > 0L }?.let(::formatFileSize)
+    val resume = if (download.resumedBytes > 0L) " · 断点续传" else ""
+    return if (total != null) "$written / $total$resume" else "正在后台下载$resume"
 }
 
 private fun formatFileSize(bytes: Long): String {
