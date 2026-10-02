@@ -80,6 +80,7 @@ internal data class ICloudSession(
 class ICloudApiException(
     val reason: ICloudError,
     message: String,
+    val statusCode: Int? = null,
 ) : Exception(message)
 
 enum class ICloudError {

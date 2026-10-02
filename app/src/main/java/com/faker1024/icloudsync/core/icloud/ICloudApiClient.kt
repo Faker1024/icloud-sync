@@ -32,7 +32,9 @@ internal class ICloudApiClient @Inject constructor(
         .build()
     private var session: ICloudSession? = null
 
+    @Synchronized
     fun restoreSession(): Boolean {
+        if (hasUsableActiveSession()) return true
         val stored = sessionStore.load() ?: return false
         return runCatching {
             checkServiceEndpoint(stored.session.driveEndpoint)
@@ -190,7 +192,15 @@ internal class ICloudApiClient @Inject constructor(
         )
     }
 
-    fun listFolder(folderId: String): List<ICloudDriveItem> {
+    fun listFolder(folderId: String): List<ICloudDriveItem> = try {
+        listFolderOnce(folderId)
+    } catch (error: ICloudApiException) {
+        if (error.reason != ICloudError.INVALID_RESPONSE || error.statusCode != 400) throw error
+        refreshAccountSession()
+        listFolderOnce(folderId)
+    }
+
+    private fun listFolderOnce(folderId: String): List<ICloudDriveItem> {
         val active = requireSession()
         ensureDriveSupported(active)
         val requestBody = JSONArray().put(
@@ -205,6 +215,20 @@ internal class ICloudApiClient @Inject constructor(
             json = requestBody,
         )
         return ICloudDriveJson.parseFolder(response.body)
+    }
+
+    private fun refreshAccountSession() {
+        when (accountLogin()) {
+            ICloudLoginResult.Authenticated -> Unit
+            ICloudLoginResult.NeedsPcsApproval -> throw ICloudApiException(
+                ICloudError.ADVANCED_DATA_PROTECTION,
+                "iCloud Drive 需要重新取得设备授权，请在受信任 Apple 设备上批准",
+            )
+            is ICloudLoginResult.NeedsTwoFactor -> throw ICloudApiException(
+                ICloudError.SESSION_EXPIRED,
+                "iCloud 登录需要重新验证，请退出后重新登录",
+            )
+        }
     }
 
     fun downloadTicket(item: ICloudDriveItem): ICloudDownloadTicket {
@@ -470,7 +494,29 @@ internal class ICloudApiClient @Inject constructor(
             .header("Origin", HOME_ENDPOINT)
             .header("Referer", "$HOME_ENDPOINT/")
             .header("User-Agent", USER_AGENT)
-        return execute(builder.build(), accepted)
+        return execute(builder.build(), accepted).also { persistSessionIfReady() }
+    }
+
+    private fun hasUsableActiveSession(): Boolean {
+        val active = session ?: return false
+        if (cookieJar.snapshot().isEmpty()) return false
+        return runCatching {
+            checkServiceEndpoint(active.driveEndpoint)
+            checkServiceEndpoint(active.docsEndpoint)
+        }.isSuccess
+    }
+
+    private fun persistSessionIfReady() {
+        val active = session ?: return
+        val cookies = cookieJar.snapshot()
+        if (cookies.isEmpty()) return
+        if (
+            runCatching {
+                checkServiceEndpoint(active.driveEndpoint)
+                checkServiceEndpoint(active.docsEndpoint)
+            }.isFailure
+        ) return
+        sessionStore.save(active.copy(), cookies)
     }
 
     private fun execute(request: Request, accepted: Set<Int>): ResponseData {
@@ -498,13 +544,17 @@ internal class ICloudApiClient @Inject constructor(
     }
 
     private fun httpError(status: Int): ICloudApiException = when (status) {
-        401, 421 -> ICloudApiException(ICloudError.SESSION_EXPIRED, "iCloud 登录已过期，请重新登录")
-        403 -> ICloudApiException(ICloudError.BAD_CREDENTIALS, "Apple 账户或密码不正确")
-        409 -> ICloudApiException(ICloudError.BAD_CODE, "验证码不正确或已过期")
-        423 -> ICloudApiException(ICloudError.ADVANCED_DATA_PROTECTION, "此账户的高级数据保护需要额外设备授权")
-        429 -> ICloudApiException(ICloudError.RATE_LIMITED, "尝试次数过多，请稍后再试")
-        in 500..599 -> ICloudApiException(ICloudError.SERVICE_UNAVAILABLE, "iCloud 服务暂时不可用")
-        else -> ICloudApiException(ICloudError.INVALID_RESPONSE, "iCloud 返回异常状态（$status）")
+        401, 421 -> ICloudApiException(ICloudError.SESSION_EXPIRED, "iCloud 登录已过期，请重新登录", status)
+        403 -> ICloudApiException(ICloudError.BAD_CREDENTIALS, "Apple 账户或密码不正确", status)
+        409 -> ICloudApiException(ICloudError.BAD_CODE, "验证码不正确或已过期", status)
+        423 -> ICloudApiException(
+            ICloudError.ADVANCED_DATA_PROTECTION,
+            "此账户的高级数据保护需要额外设备授权",
+            status,
+        )
+        429 -> ICloudApiException(ICloudError.RATE_LIMITED, "尝试次数过多，请稍后再试", status)
+        in 500..599 -> ICloudApiException(ICloudError.SERVICE_UNAVAILABLE, "iCloud 服务暂时不可用", status)
+        else -> ICloudApiException(ICloudError.INVALID_RESPONSE, "iCloud 返回异常状态（$status）", status)
     }
 
     private fun parseObject(body: String): JSONObject = try {
