@@ -17,6 +17,9 @@ interface SyncFailureDao {
     @Query("DELETE FROM sync_failures WHERE scopeId = :scopeId")
     suspend fun deleteScope(scopeId: String)
 
+    @Query("DELETE FROM sync_failures WHERE remoteItemId = :remoteId")
+    suspend fun deleteRemoteItem(remoteId: String)
+
     @Query("SELECT * FROM sync_failures WHERE scopeId = :scopeId ORDER BY updatedAt DESC")
     suspend fun listForScope(scopeId: String): List<SyncFailureEntity>
 

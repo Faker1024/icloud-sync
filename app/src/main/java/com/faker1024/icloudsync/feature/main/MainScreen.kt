@@ -1,5 +1,6 @@
 package com.faker1024.icloudsync.feature.main
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,6 +60,7 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Settings
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.faker1024.icloudsync.BuildConfig
 import com.faker1024.icloudsync.core.icloud.ICloudDriveItem
 import com.faker1024.icloudsync.core.database.ImportBatchEntity
@@ -87,6 +89,7 @@ fun MainScreen(
     onSyncFolder: (ICloudDriveItem) -> Unit,
     onDownloadFile: (ICloudDriveItem) -> Unit,
     onSelectFile: () -> Unit,
+    imageSimilarityViewModel: ImageSimilarityViewModel = viewModel(),
 ) {
     val batches by viewModel.batches.collectAsStateWithLifecycle()
     val albumName by viewModel.albumName.collectAsStateWithLifecycle()
@@ -95,9 +98,19 @@ fun MainScreen(
     val syncedFiles by viewModel.syncedFiles.collectAsStateWithLifecycle()
     val localBrowserPreferences by viewModel.localBrowserPreferences.collectAsStateWithLifecycle()
     val privateStorage by viewModel.privateStorage.collectAsStateWithLifecycle()
+    val similarityState by imageSimilarityViewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var section by rememberSaveable { mutableStateOf(MainSection.CLOUD_DRIVE) }
+    var showSimilarity by rememberSaveable { mutableStateOf(false) }
+    val closeSimilarity: () -> Unit = {
+        if (!similarityState.deleting) {
+            imageSimilarityViewModel.cancelScan()
+            showSimilarity = false
+            viewModel.refreshSyncedFiles()
+        }
+    }
+    BackHandler(enabled = section == MainSection.LOCAL_FILES && showSimilarity) { closeSimilarity() }
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
@@ -117,7 +130,7 @@ fun MainScreen(
             CenterAlignedTopAppBar(
                 title = {
                     Text(
-                        sectionTitle(section),
+                        if (section == MainSection.LOCAL_FILES && showSimilarity) "相似图片检查" else sectionTitle(section),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -140,6 +153,7 @@ fun MainScreen(
                         MainSection.entries.forEach { item ->
                             NavigationBarItem(
                                 selected = section == item,
+                                enabled = !similarityState.deleting,
                                 onClick = { section = item },
                                 icon = {
                                     Icon(
@@ -174,7 +188,22 @@ fun MainScreen(
                 onDownloadFile = onDownloadFile,
             )
 
-            MainSection.LOCAL_FILES -> SyncedFilesPage(
+            MainSection.LOCAL_FILES -> if (showSimilarity) ImageSimilarityPage(
+                modifier = Modifier.padding(padding),
+                state = similarityState,
+                onClose = closeSimilarity,
+                onLevelChange = imageSimilarityViewModel::setLevel,
+                onScan = imageSimilarityViewModel::scan,
+                onCancelScan = imageSimilarityViewModel::cancelScan,
+                onToggle = imageSimilarityViewModel::toggle,
+                onClearSelection = imageSimilarityViewModel::clearSelection,
+                onSelectFailures = imageSimilarityViewModel::selectFailedFiles,
+                onSelectPending = imageSimilarityViewModel::selectPendingLocalFiles,
+                onDelete = imageSimilarityViewModel::deleteSelected,
+                onOpenFile = viewModel::openSyncedFile,
+                onShareFile = viewModel::shareSyncedFile,
+                loadImage = imageSimilarityViewModel::loadImage,
+            ) else SyncedFilesPage(
                 modifier = Modifier.padding(padding),
                 state = syncedFiles,
                 preferences = localBrowserPreferences,
@@ -183,6 +212,10 @@ fun MainScreen(
                 onShareFile = viewModel::shareSyncedFile,
                 onSetLayout = viewModel::setLocalBrowserLayout,
                 onSetSorting = viewModel::setLocalSorting,
+                onFindSimilarImages = {
+                    imageSimilarityViewModel.refreshPendingLocalCleanup()
+                    showSimilarity = true
+                },
                 loadImage = viewModel::loadSyncedImage,
             )
 

@@ -8,6 +8,7 @@ import androidx.core.net.toUri
 import com.faker1024.icloudsync.core.database.SyncedFileMetadataDao
 import com.faker1024.icloudsync.core.database.SyncedFileMetadataEntity
 import com.faker1024.icloudsync.core.sync.buildDownloadRelativePath
+import com.faker1024.icloudsync.core.sync.ICloudFileMutationGuard
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileInputStream
@@ -40,6 +41,7 @@ data class PublicFileMigrationItem(
 class PublicFileMigrationStore @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val metadataDao: SyncedFileMetadataDao,
+    private val mutationGuard: ICloudFileMutationGuard,
 ) {
     suspend fun summary(): PublicFileMigrationSummary = withContext(Dispatchers.IO) {
         val files = listMigratableFiles()
@@ -91,7 +93,7 @@ class PublicFileMigrationStore @Inject constructor(
         }
     }
 
-    suspend fun migrate(item: PublicFileMigrationItem): Long = withContext(Dispatchers.IO) {
+    suspend fun migrate(item: PublicFileMigrationItem): Long = withContext(Dispatchers.IO) { mutationGuard.transfer {
         val sourceUri = item.contentUri.toUri()
         val sourceMetadata = metadataDao.get(item.contentUri)
         val stableId = sourceMetadata?.remoteItemId ?: "legacy:${item.contentUri}"
@@ -115,6 +117,7 @@ class PublicFileMigrationStore @Inject constructor(
                 size = target.length().coerceAtLeast(0L),
                 remoteModifiedAtMillis = modifiedAtMillis,
                 updatedAt = System.currentTimeMillis(),
+                accountKey = sourceMetadata?.accountKey,
             ),
         )
         check(context.contentResolver.delete(sourceUri, null, null) == 1) {
@@ -122,7 +125,7 @@ class PublicFileMigrationStore @Inject constructor(
         }
         runCatching { metadataDao.delete(item.contentUri) }
         target.length().coerceAtLeast(0L)
-    }
+    } }
 
     private suspend fun resolveTarget(
         item: PublicFileMigrationItem,

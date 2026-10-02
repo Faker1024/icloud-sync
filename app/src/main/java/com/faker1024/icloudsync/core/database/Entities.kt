@@ -82,6 +82,19 @@ data class SyncedFileMetadataEntity(
     val size: Long,
     val remoteModifiedAtMillis: Long,
     val updatedAt: Long,
+    val accountKey: String? = null,
+)
+
+@Entity(tableName = "image_deletions", indices = [Index("remoteItemId")])
+data class ImageDeletionEntity(
+    @PrimaryKey val contentUri: String,
+    val remoteItemId: String,
+    val accountKey: String,
+    val size: Long,
+    val modifiedAtMillis: Long,
+    val localModifiedAtMillis: Long,
+    val state: String,
+    val updatedAt: Long,
 )
 
 @Entity(

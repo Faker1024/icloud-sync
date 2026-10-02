@@ -17,8 +17,8 @@ android {
         applicationId = "com.faker1024.icloudsync"
         minSdk = 29
         targetSdk = 36
-        versionCode = 19
-        versionName = "0.17.2"
+        versionCode = 20
+        versionName = "0.18.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -96,6 +96,7 @@ dependencies {
     implementation(libs.zoomimage.view)
 
     testImplementation(libs.junit)
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

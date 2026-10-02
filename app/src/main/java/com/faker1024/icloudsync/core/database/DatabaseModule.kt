@@ -29,4 +29,7 @@ object DatabaseModule {
 
     @Provides
     fun provideSyncFailureDao(database: AppDatabase): SyncFailureDao = database.syncFailureDao()
+
+    @Provides
+    fun provideImageDeletionDao(database: AppDatabase): ImageDeletionDao = database.imageDeletionDao()
 }

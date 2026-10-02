@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import com.faker1024.icloudsync.core.sync.DownloadStoreResult
 import com.faker1024.icloudsync.core.sync.DownloadWriteProgress
 import com.faker1024.icloudsync.core.sync.ICloudDownloadStore
+import com.faker1024.icloudsync.core.sync.ICloudFileMutationGuard
+import com.faker1024.icloudsync.core.database.ImageDeletionDao
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -15,6 +17,8 @@ class ICloudDriveRepository @Inject internal constructor(
     private val api: ICloudApiClient,
     private val previewLoader: ICloudPreviewLoader,
     private val downloadStore: ICloudDownloadStore,
+    private val mutationGuard: ICloudFileMutationGuard,
+    private val imageDeletionDao: ImageDeletionDao,
 ) {
     suspend fun restoreSession(): Boolean = withContext(Dispatchers.IO) { api.restoreSession() }
 
@@ -45,16 +49,22 @@ class ICloudDriveRepository @Inject internal constructor(
         item: ICloudDriveItem,
         directories: List<String>,
         onProgress: suspend (DownloadWriteProgress) -> Unit = {},
-    ): DownloadStoreResult = withContext(Dispatchers.IO) {
+    ): DownloadStoreResult = withContext(Dispatchers.IO) { mutationGuard.transfer {
+        val accountKey = api.accountKey()
+            ?: throw ICloudApiException(ICloudError.SESSION_EXPIRED, "请先登录 iCloud")
+        if (imageDeletionDao.isDeleted(item.id, accountKey) > 0) {
+            throw ICloudApiException(ICloudError.INVALID_RESPONSE, "该图片已通过相似图片清理删除，请刷新云盘目录")
+        }
         downloadStore.save(
             item = item,
             directories = directories,
+            accountKey = accountKey,
             onProgress = onProgress,
-            sourceProvider = { offset -> api.openDownload(item, offset) },
+            sourceProvider = { offset -> api.openDownload(item, offset, accountKey) },
         )
-    }
+    } }
 
-    fun logout() {
+    suspend fun logout() = withContext(Dispatchers.IO) {
         api.logout()
         previewLoader.clear()
     }

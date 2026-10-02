@@ -11,5 +11,16 @@ rclone iCloud Drive backend:
 rclone is distributed under the MIT License. Its license is available at:
 https://github.com/rclone/rclone/blob/master/COPYING
 
+The local image similarity checker independently implements the standard DCT
+perceptual-hash (pHash) and difference-hash (dHash) algorithms, with additional
+color, aspect-ratio, and complete-link grouping safeguards. Algorithm reference:
+
+  ImageHash by Johannes Buchner and contributors
+  https://github.com/JohannesBuchner/imagehash
+  License: BSD-2-Clause
+  https://github.com/JohannesBuchner/imagehash/blob/master/LICENSE
+
+No ImageHash Python code or runtime dependency is included in the Android app.
+
 Apple, iCloud and iCloud Drive are trademarks of Apple Inc. This project is an
 independent third-party client and is not affiliated with or endorsed by Apple.

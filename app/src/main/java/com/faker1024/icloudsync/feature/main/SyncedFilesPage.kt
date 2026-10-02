@@ -48,6 +48,7 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PictureAsPdf
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
@@ -123,6 +124,7 @@ internal fun SyncedFilesPage(
     onShareFile: (SyncedFile) -> Unit,
     onSetLayout: (LocalBrowserLayout) -> Unit,
     onSetSorting: (LocalSortField, LocalSortDirection) -> Unit,
+    onFindSimilarImages: () -> Unit,
     loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,
 ) {
     var encodedPath by rememberSaveable { mutableStateOf("") }
@@ -301,6 +303,11 @@ internal fun SyncedFilesPage(
                         maxLines = 1,
                     )
                 }
+                LocalToolbarAction(
+                    icon = Icons.Rounded.PhotoLibrary,
+                    label = "相似图片",
+                    onClick = onFindSimilarImages,
+                )
                 LocalToolbarAction(
                     icon = Icons.AutoMirrored.Rounded.Sort,
                     label = "排序",
@@ -677,7 +684,7 @@ private fun SyncedFileActionsSheet(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SyncedImagePreviewDialog(
+internal fun SyncedImagePreviewDialog(
     files: List<SyncedFile>,
     selectedFile: SyncedFile,
     loadImage: suspend (SyncedFile, Int) -> android.graphics.Bitmap,

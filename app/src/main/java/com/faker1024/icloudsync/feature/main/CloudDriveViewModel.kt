@@ -255,9 +255,12 @@ class CloudDriveViewModel @Inject constructor(
         syncObservationJob = null
         failureObservationJob?.cancel()
         failureObservationJob = null
-        repository.logout()
-        _state.value = loggedOutState()
-        _events.tryEmit("已清除本机 iCloud 登录会话")
+        _state.update { it.copy(isBusy = true) }
+        viewModelScope.launch {
+            repository.logout()
+            _state.value = loggedOutState()
+            _events.tryEmit("已清除本机 iCloud 登录会话")
+        }
     }
 
     fun clearError() = _state.update { it.copy(error = null) }

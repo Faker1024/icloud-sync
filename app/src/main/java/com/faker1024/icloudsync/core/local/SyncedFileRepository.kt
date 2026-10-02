@@ -64,6 +64,7 @@ class SyncedFileRepository @Inject constructor(
                         size = size,
                     ),
                     directories = directories,
+                    localModifiedAtMillis = file.lastModified().coerceAtLeast(0L),
                 )
             }
             .toList()
@@ -126,6 +127,7 @@ class SyncedFileRepository @Inject constructor(
                                 size = size,
                             ),
                             directories = directories,
+                            localModifiedAtMillis = indexedModifiedAtMillis,
                         ),
                     )
                 }

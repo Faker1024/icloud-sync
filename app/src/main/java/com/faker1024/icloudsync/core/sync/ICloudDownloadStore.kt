@@ -47,18 +47,20 @@ class ICloudDownloadStore @Inject constructor(
     internal suspend fun save(
         item: ICloudDriveItem,
         directories: List<String>,
+        accountKey: String,
         onProgress: suspend (DownloadWriteProgress) -> Unit = {},
         sourceProvider: (offset: Long) -> ICloudDownloadSource,
     ): DownloadStoreResult = withContext(Dispatchers.IO) {
         val relativePath = buildDownloadRelativePath(directories)
         val requestedName = sanitizeCloudFileName(item.name)
-        val target = resolvePrivateDestination(item, directories, requestedName)
+        val target = resolvePrivateDestination(item, directories, requestedName, accountKey)
         val displayName = target.name
         val remoteModifiedAtSeconds = parseCloudModifiedAtSeconds(item.modifiedAt)
         val itemExpectedSize = item.size.takeIf { it >= 0L }
-        if (canReusePrivateFile(target, item, itemExpectedSize)) {
+        if (canReusePrivateFile(target, item, itemExpectedSize, accountKey)) {
             preserveRemoteModifiedTimeBestEffort(target, remoteModifiedAtSeconds)
             recordMetadata(
+                accountKey = accountKey,
                 item = item,
                 file = target,
                 displayName = displayName,
@@ -88,6 +90,7 @@ class ICloudDownloadStore @Inject constructor(
         if (temporary.isFile && itemExpectedSize != null && temporary.length() == itemExpectedSize) {
             replacePrivateFile(temporary, target)
             return@withContext finishDownload(
+                accountKey = accountKey,
                 item = item,
                 target = target,
                 displayName = displayName,
@@ -146,6 +149,7 @@ class ICloudDownloadStore @Inject constructor(
             replacePrivateFile(temporary, target)
         }
         finishDownload(
+            accountKey = accountKey,
             item = item,
             target = target,
             displayName = displayName,
@@ -157,6 +161,7 @@ class ICloudDownloadStore @Inject constructor(
     }
 
     private suspend fun finishDownload(
+        accountKey: String,
         item: ICloudDriveItem,
         target: File,
         displayName: String,
@@ -166,7 +171,7 @@ class ICloudDownloadStore @Inject constructor(
         onProgress: suspend (DownloadWriteProgress) -> Unit,
     ): DownloadStoreResult {
         preserveRemoteModifiedTimeBestEffort(target, remoteModifiedAtSeconds)
-        recordMetadata(item, target, displayName, relativePath, remoteModifiedAtSeconds)
+        recordMetadata(accountKey, item, target, displayName, relativePath, remoteModifiedAtSeconds)
         val bytes = target.length().coerceAtLeast(0L)
         onProgress(DownloadWriteProgress(bytes, bytes, resumedBytes))
         return DownloadStoreResult(privateDriveUri(context, target), bytes, skipped = false)
@@ -176,27 +181,31 @@ class ICloudDownloadStore @Inject constructor(
         item: ICloudDriveItem,
         directories: List<String>,
         requestedName: String,
+        accountKey: String,
     ): File {
         val exact = privateDriveFile(context, directories, requestedName)
-        if (canUsePrivateDestination(exact, item)) return exact
+        if (canUsePrivateDestination(exact, item, accountKey)) return exact
         val candidate = privateDriveFile(
             context,
             directories,
-            addStablePrivateFileSuffix(requestedName, item.id),
+            addStablePrivateFileSuffix(requestedName, "$accountKey:${item.id}"),
         )
-        if (canUsePrivateDestination(candidate, item)) return candidate
-        return privateDriveFile(
+        if (canUsePrivateDestination(candidate, item, accountKey)) return candidate
+        val fallback = privateDriveFile(
             context,
             directories,
-            addStablePrivateFileSuffix(requestedName, "${item.id}#fallback"),
+            addStablePrivateFileSuffix(requestedName, "$accountKey:${item.id}#fallback"),
         )
+        check(canUsePrivateDestination(fallback, item, accountKey)) { "本地存在其他账户的同名文件，请先调整保存位置" }
+        return fallback
     }
 
-    private suspend fun canUsePrivateDestination(file: File, item: ICloudDriveItem): Boolean {
+    private suspend fun canUsePrivateDestination(file: File, item: ICloudDriveItem, accountKey: String): Boolean {
         if (!file.exists()) return true
         val uri = privateDriveUri(context, file).toString()
         val metadata = metadataDao.get(uri)
         if (metadata == null) return true
+        if (metadata.accountKey != null && metadata.accountKey != accountKey) return false
         return metadata.remoteItemId == item.id || metadata.remoteItemId.startsWith(LEGACY_REMOTE_ID_PREFIX)
     }
 
@@ -204,9 +213,11 @@ class ICloudDownloadStore @Inject constructor(
         file: File,
         item: ICloudDriveItem,
         expectedSize: Long?,
+        accountKey: String,
     ): Boolean {
         if (!file.isFile || expectedSize == null || file.length() != expectedSize) return false
         val metadata = metadataDao.get(privateDriveUri(context, file).toString()) ?: return false
+        if (metadata.accountKey != null && metadata.accountKey != accountKey) return false
         return remoteFileFingerprintMatches(
             storedRemoteId = metadata.remoteItemId,
             storedSize = metadata.size,
@@ -217,6 +228,7 @@ class ICloudDownloadStore @Inject constructor(
     }
 
     private suspend fun recordMetadata(
+        accountKey: String,
         item: ICloudDriveItem,
         file: File,
         displayName: String,
@@ -236,6 +248,7 @@ class ICloudDownloadStore @Inject constructor(
                 size = file.length().coerceAtLeast(0L),
                 remoteModifiedAtMillis = modifiedAtMillis,
                 updatedAt = System.currentTimeMillis(),
+                accountKey = accountKey,
             ),
         )
     }

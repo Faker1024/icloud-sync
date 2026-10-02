@@ -13,6 +13,7 @@ data class SyncedFile(
     val size: Long,
     val modifiedAtMillis: Long,
     val directories: List<String>,
+    val localModifiedAtMillis: Long = modifiedAtMillis,
 ) {
     val isImage: Boolean
         get() = mimeType?.startsWith("image/", ignoreCase = true) == true ||

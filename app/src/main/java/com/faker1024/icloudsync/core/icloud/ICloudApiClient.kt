@@ -12,8 +12,10 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -30,6 +32,8 @@ internal class ICloudApiClient @Inject constructor(
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
+    // A trash request must not be transparently replayed after an ambiguous connection failure.
+    private val mutationHttpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build()
     private var session: ICloudSession? = null
 
     @Synchronized
@@ -48,6 +52,7 @@ internal class ICloudApiClient @Inject constructor(
         }
     }
 
+    @Synchronized
     fun beginLogin(accountName: String, password: String): ICloudLoginResult {
         val normalizedAccount = accountName.trim().lowercase(Locale.US)
         require(normalizedAccount.isNotBlank() && password.isNotEmpty()) { "请输入 Apple 账户和密码" }
@@ -118,6 +123,7 @@ internal class ICloudApiClient @Inject constructor(
         }
     }
 
+    @Synchronized
     fun requestTrustedDeviceCode() {
         val response = authRequest(
             Request.Builder()
@@ -130,6 +136,7 @@ internal class ICloudApiClient @Inject constructor(
         }
     }
 
+    @Synchronized
     fun requestSmsCode(phoneId: Int) {
         postAuthJson(
             path = "/verify/phone",
@@ -141,6 +148,7 @@ internal class ICloudApiClient @Inject constructor(
         )
     }
 
+    @Synchronized
     fun verifyTwoFactor(code: String, phoneId: Int?): ICloudLoginResult {
         require(code.matches(Regex("\\d{6}"))) { "请输入 6 位验证码" }
         val response = if (phoneId == null) {
@@ -169,11 +177,13 @@ internal class ICloudApiClient @Inject constructor(
         return accountLogin()
     }
 
+    @Synchronized
     fun needsPcsApproval(): Boolean {
         val active = requireSession()
         return active.drivePcsRequired && !cookieJar.contains(PCS_DOCUMENTS_COOKIE)
     }
 
+    @Synchronized
     fun pollPcsApproval(): ICloudPcsPollResult {
         val active = requireSession()
         if (!needsPcsApproval()) return ICloudPcsPollResult.APPROVED
@@ -192,6 +202,7 @@ internal class ICloudApiClient @Inject constructor(
         )
     }
 
+    @Synchronized
     fun listFolder(folderId: String): List<ICloudDriveItem> = try {
         listFolderOnce(folderId)
     } catch (error: ICloudApiException) {
@@ -231,6 +242,52 @@ internal class ICloudApiClient @Inject constructor(
         }
     }
 
+    @Synchronized
+    fun accountKey(): String? {
+        if (!hasUsableActiveSession()) return null
+        val active = session ?: return null
+        if (active.appleId.isBlank() || active.sessionToken.isBlank()) return null
+        if (active.drivePcsRequired && !cookieJar.contains(PCS_DOCUMENTS_COOKIE)) return null
+        return ICloudTrashProtocol.accountKey(active.appleId)
+    }
+
+    /** The session monitor keeps login/logout and cookie replacement outside this transaction. */
+    @Synchronized
+    fun trashFile(
+        remoteId: String,
+        expectedSize: Long,
+        expectedModifiedAtMillis: Long,
+        expectedAccountKey: String,
+    ) {
+        if (expectedAccountKey.isBlank() || accountKey() != expectedAccountKey) {
+            throw ICloudApiException(ICloudError.SESSION_EXPIRED, "当前 iCloud 账户与删除任务不一致，请重新登录原账户")
+        }
+        val active = requireSession()
+        ensureDriveSupported(active)
+        checkServiceEndpoint(active.driveEndpoint)
+        val endpoint = active.driveEndpoint.trimEnd('/')
+        val details = commonJsonRequest(
+            url = "$endpoint/retrieveItemDetails",
+            method = "POST",
+            json = ICloudTrashProtocol.detailsRequest(remoteId),
+        )
+        val file = ICloudTrashProtocol.verifyDetails(
+            details.body, remoteId, expectedSize, expectedModifiedAtMillis,
+        )
+        if (accountKey() != expectedAccountKey || session !== active) {
+            throw ICloudApiException(ICloudError.SESSION_EXPIRED, "iCloud 账户状态已变化，已停止删除")
+        }
+        if (file.alreadyTrashed) return
+        val result = commonJsonRequest(
+            url = "$endpoint/moveItemsToTrash",
+            method = "POST",
+            json = ICloudTrashProtocol.trashRequest(file),
+            client = mutationHttpClient,
+        )
+        ICloudTrashProtocol.verifyTrashResult(result.body, remoteId)
+    }
+
+    @Synchronized
     fun downloadTicket(item: ICloudDriveItem): ICloudDownloadTicket {
         require(!item.isFolder) { "文件夹不能直接下载" }
         val active = requireSession()
@@ -253,7 +310,16 @@ internal class ICloudApiClient @Inject constructor(
         return ICloudDownloadTicket(downloadUrl, cookieJar.headerFor(parsed))
     }
 
-    fun openDownload(item: ICloudDriveItem, requestedOffset: Long = 0L): ICloudDownloadSource {
+    // Only stream opening is serialized; the caller reads the body outside this monitor.
+    @Synchronized
+    fun openDownload(
+        item: ICloudDriveItem,
+        requestedOffset: Long = 0L,
+        expectedAccountKey: String? = null,
+    ): ICloudDownloadSource {
+        if (expectedAccountKey != null && accountKey() != expectedAccountKey) {
+            throw ICloudApiException(ICloudError.SESSION_EXPIRED, "iCloud 账户已改变，请重新发起同步")
+        }
         val safeOffset = requestedOffset.coerceAtLeast(0L)
         val ticket = downloadTicket(item)
         var target = ticket.url.toHttpUrl()
@@ -290,7 +356,7 @@ internal class ICloudApiClient @Inject constructor(
             } else {
                 if (response.code == 416 && safeOffset > 0L) {
                     response.close()
-                    return openDownload(item, 0L)
+                    return openDownload(item, 0L, expectedAccountKey)
                 }
                 if (!response.isSuccessful) {
                     val status = response.code
@@ -339,6 +405,7 @@ internal class ICloudApiClient @Inject constructor(
         throw ICloudApiException(ICloudError.INVALID_RESPONSE, "iCloud 下载地址无效")
     }
 
+    @Synchronized
     fun logout() {
         session = null
         cookieJar.clear()
@@ -481,20 +548,40 @@ internal class ICloudApiClient @Inject constructor(
         }
     }
 
-    private fun commonJsonRequest(url: String, method: String, json: Any): ResponseData {
-        val body = json.toString().toRequestBody(JSON_MEDIA_TYPE)
+    private fun commonJsonRequest(
+        url: String,
+        method: String,
+        json: Any,
+        client: OkHttpClient = httpClient,
+    ): ResponseData {
+        val encodedBody = json.toString().toRequestBody(JSON_MEDIA_TYPE)
+        val body = if (client === mutationHttpClient) {
+            // Also blocks automatic HTTP 408/503 follow-ups, which are separate from I/O recovery.
+            object : RequestBody() {
+                override fun contentType() = encodedBody.contentType()
+                override fun contentLength() = encodedBody.contentLength()
+                override fun writeTo(sink: BufferedSink) = encodedBody.writeTo(sink)
+                override fun isOneShot() = true
+            }
+        } else {
+            encodedBody
+        }
         val builder = Request.Builder().url(url)
         if (method == "POST") builder.post(body) else builder.put(body)
-        return commonRequest(builder, setOf(200))
+        return commonRequest(builder, setOf(200), client)
     }
 
-    private fun commonRequest(builder: Request.Builder, accepted: Set<Int>): ResponseData {
+    private fun commonRequest(
+        builder: Request.Builder,
+        accepted: Set<Int>,
+        client: OkHttpClient = httpClient,
+    ): ResponseData {
         builder
             .header("Content-Type", "application/json")
             .header("Origin", HOME_ENDPOINT)
             .header("Referer", "$HOME_ENDPOINT/")
             .header("User-Agent", USER_AGENT)
-        return execute(builder.build(), accepted).also { persistSessionIfReady() }
+        return execute(builder.build(), accepted, client).also { persistSessionIfReady() }
     }
 
     private fun hasUsableActiveSession(): Boolean {
@@ -519,9 +606,13 @@ internal class ICloudApiClient @Inject constructor(
         sessionStore.save(active.copy(), cookies)
     }
 
-    private fun execute(request: Request, accepted: Set<Int>): ResponseData {
+    private fun execute(
+        request: Request,
+        accepted: Set<Int>,
+        client: OkHttpClient = httpClient,
+    ): ResponseData {
         val response = try {
-            httpClient.newCall(request).execute()
+            client.newCall(request).execute()
         } catch (error: IOException) {
             throw ICloudApiException(ICloudError.NETWORK, "无法连接 iCloud 中国区，请检查网络")
         }
