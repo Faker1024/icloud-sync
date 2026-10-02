@@ -44,6 +44,13 @@ class ICloudDownloadStoreTest {
     }
 
     @Test
+    fun `zero byte files do not require an iCloud content request`() {
+        assertEquals(false, remoteContentRequired(0L))
+        assertEquals(true, remoteContentRequired(1L))
+        assertEquals(true, remoteContentRequired(null))
+    }
+
+    @Test
     fun `remote fingerprint rejects same size file with a newer cloud modification`() {
         val item = cloudFile(modifiedAt = "2024-03-20T10:20:05Z")
         assertEquals(

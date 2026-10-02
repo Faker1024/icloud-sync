@@ -17,8 +17,8 @@ android {
         applicationId = "com.faker1024.icloudsync"
         minSdk = 29
         targetSdk = 36
-        versionCode = 18
-        versionName = "0.17.1"
+        versionCode = 19
+        versionName = "0.17.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true

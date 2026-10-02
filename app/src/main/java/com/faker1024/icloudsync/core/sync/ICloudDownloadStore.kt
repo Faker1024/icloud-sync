@@ -79,6 +79,12 @@ class ICloudDownloadStore @Inject constructor(
         }
         val temporary = resumablePartialFile(target, item)
         if (itemExpectedSize != null && temporary.length() > itemExpectedSize) temporary.delete()
+        if (!remoteContentRequired(itemExpectedSize) && !temporary.isFile) {
+            FileOutputStream(temporary, false).use { output ->
+                output.flush()
+                output.fd.sync()
+            }
+        }
         if (temporary.isFile && itemExpectedSize != null && temporary.length() == itemExpectedSize) {
             replacePrivateFile(temporary, target)
             return@withContext finishDownload(
@@ -305,6 +311,8 @@ internal fun modifiedTimeMatches(actualSeconds: Long, expectedSeconds: Long): Bo
     }
     return difference <= FILE_TIME_TOLERANCE_SECONDS
 }
+
+internal fun remoteContentRequired(expectedSize: Long?): Boolean = expectedSize != 0L
 
 fun buildDownloadRelativePath(directories: List<String>): String {
     val nested = directories
